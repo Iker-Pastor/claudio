@@ -29,6 +29,59 @@ static class Win {
 
 enum Mode { Floor, WallL, WallR, Ceiling, Air }
 
+// ---------- Menu en modo oscuro ----------
+class DarkColors : ProfessionalColorTable {
+    static readonly Color Bg = Color.FromArgb(43, 43, 43);
+    static readonly Color Hover = Color.FromArgb(65, 65, 65);
+    static readonly Color Border = Color.FromArgb(80, 80, 80);
+    public override Color ToolStripDropDownBackground { get { return Bg; } }
+    public override Color ImageMarginGradientBegin { get { return Bg; } }
+    public override Color ImageMarginGradientMiddle { get { return Bg; } }
+    public override Color ImageMarginGradientEnd { get { return Bg; } }
+    public override Color MenuBorder { get { return Border; } }
+    public override Color MenuItemBorder { get { return Hover; } }
+    public override Color MenuItemSelected { get { return Hover; } }
+    public override Color MenuItemSelectedGradientBegin { get { return Hover; } }
+    public override Color MenuItemSelectedGradientEnd { get { return Hover; } }
+    public override Color MenuItemPressedGradientBegin { get { return Hover; } }
+    public override Color MenuItemPressedGradientEnd { get { return Hover; } }
+    public override Color SeparatorDark { get { return Border; } }
+    public override Color SeparatorLight { get { return Border; } }
+    public override Color CheckBackground { get { return Color.FromArgb(70, 90, 120); } }
+    public override Color CheckSelectedBackground { get { return Color.FromArgb(80, 105, 140); } }
+    public override Color CheckPressedBackground { get { return Color.FromArgb(80, 105, 140); } }
+}
+
+class DarkRenderer : ToolStripProfessionalRenderer {
+    static readonly Color Text = Color.FromArgb(240, 240, 240);
+    public DarkRenderer() : base(new DarkColors()) { RoundedEdges = false; }
+
+    protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e) {
+        e.TextColor = e.Item.Enabled ? Text : Color.FromArgb(130, 130, 130);
+        base.OnRenderItemText(e);
+    }
+    protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e) {
+        e.ArrowColor = Text;
+        base.OnRenderArrow(e);
+    }
+    // La marca de verificacion por defecto es negra: en oscuro se dibuja a mano en blanco
+    protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e) {
+        Rectangle r = new Rectangle(e.ImageRectangle.X - 2, e.ImageRectangle.Y - 2, e.ImageRectangle.Width + 3, e.ImageRectangle.Height + 3);
+        using (SolidBrush b = new SolidBrush(ColorTable.CheckBackground)) e.Graphics.FillRectangle(b, r);
+        using (Pen p = new Pen(Color.FromArgb(120, 150, 200))) e.Graphics.DrawRectangle(p, r);
+        if (e.Item.Image == null) {
+            System.Drawing.Drawing2D.SmoothingMode old = e.Graphics.SmoothingMode;
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using (Pen p = new Pen(Text, 1.6f)) {
+                int x = e.ImageRectangle.X, y = e.ImageRectangle.Y, w = e.ImageRectangle.Width, h = e.ImageRectangle.Height;
+                e.Graphics.DrawLines(p, new PointF[] {
+                    new PointF(x + w * 0.2f, y + h * 0.5f), new PointF(x + w * 0.42f, y + h * 0.72f), new PointF(x + w * 0.8f, y + h * 0.28f) });
+            }
+            e.Graphics.SmoothingMode = old;
+        }
+    }
+}
+
 class PetForm : Form {
     // ---------- Sprite (cada caracter = 1 pixel) ----------
     static readonly string[] Body = {
@@ -87,7 +140,8 @@ class PetForm : Form {
     };
     Color baseColor = Orange;     // color elegido
     readonly ToolStripMenuItem[] miPresets = new ToolStripMenuItem[PresetNames.Length];
-    readonly ToolStripMenuItem miCustom, miRainbow;
+    readonly ToolStripMenuItem miCustom, miRainbow, miColor;
+    readonly ContextMenuStrip menu;
     bool rainbow = false;         // modo arcoiris: el color va rotando
     double hue = 0;               // tono actual del arcoiris (0..360)
     static readonly string DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MascotaClaude");
@@ -116,10 +170,10 @@ class PetForm : Form {
         Location = new Point((int)Math.Round(a0.Left + a0.Width / 2.0) - M, a0.Bottom - H - M);
 
         // ---------- Menu click derecho ----------
-        ContextMenuStrip menu = new ContextMenuStrip();
+        menu = new ContextMenuStrip();
         menu.Items.Add("Abrir Claude", null, delegate { FocusClaude(); });
 
-        ToolStripMenuItem miColor = new ToolStripMenuItem("Color");
+        miColor = new ToolStripMenuItem("Color");
         for (int i = 0; i < PresetNames.Length; i++) {
             Color c = PresetColors[i];
             miPresets[i] = new ToolStripMenuItem(PresetNames[i], Swatch(c));
@@ -150,6 +204,8 @@ class PetForm : Form {
         UpdateColorChecks();
 
         SystemEvents.DisplaySettingsChanged += OnDisplayChanged;
+        ApplyMenuTheme();
+        SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;   // cambiar claro/oscuro en vivo
 
         timer.Interval = 30;
         timer.Tick += OnTick;
@@ -162,9 +218,32 @@ class PetForm : Form {
     protected override void Dispose(bool disposing) {
         if (disposing) {
             SystemEvents.DisplaySettingsChanged -= OnDisplayChanged;
+            SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
             timer.Dispose(); bBody.Dispose(); bBlack.Dispose();
         }
         base.Dispose(disposing);
+    }
+
+    // ---------- Tema del menu (sigue el modo claro/oscuro de Windows) ----------
+    static bool SystemDark() {
+        try {
+            object v = Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1);
+            return v is int && (int)v == 0;
+        } catch { return false; }
+    }
+
+    bool? menuDark = null;   // tema aplicado ahora mismo (null = ninguno todavia)
+    void ApplyMenuTheme() {
+        bool dark = SystemDark();
+        if (menuDark == dark) return;
+        menuDark = dark;
+        ToolStripRenderer r = dark ? (ToolStripRenderer)new DarkRenderer() : new ToolStripProfessionalRenderer();
+        menu.Renderer = r;
+        miColor.DropDown.Renderer = r;
+    }
+
+    void OnUserPreferenceChanged(object s, UserPreferenceChangedEventArgs e) {
+        if (e.Category == UserPreferenceCategory.General) ApplyMenuTheme();
     }
 
     // ---------- Color ----------
