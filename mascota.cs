@@ -5,13 +5,16 @@
 // - Sueltala en movimiento para lanzarla: vuela, gira y rebota en los bordes
 // - Click: da un saltito y trae Claude al frente (lo abre si no esta abierto)
 // - Rueda del raton encima: crece / encoge
-// - Click derecho: menu (Abrir Claude / Quieta-Pasear / Salir)
+// - Click derecho: menu (Abrir Claude / Color / Quieta-Pasear / Salir)
+// - Color: predefinidos o personalizado (se guarda)
 //
 // Se compila con el csc.exe que trae Windows (.NET Framework 4, C# 5): mascota.vbs lo hace solo.
 
 using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -72,9 +75,21 @@ class PetForm : Form {
 
     readonly Random rand = new Random();
     readonly Timer timer = new Timer();
-    readonly SolidBrush bOrange = new SolidBrush(Orange);
+    SolidBrush bBody = new SolidBrush(Orange);
     readonly SolidBrush bBlack = new SolidBrush(Black);
     readonly ToolStripMenuItem miStay;
+
+    // ---------- Color ----------
+    static readonly string[] PresetNames = { "Naranja Claude", "Rojo", "Azul", "Verde", "Morado", "Rosa", "Amarillo", "Blanco" };
+    static readonly Color[] PresetColors = {
+        Orange, Color.FromArgb(220, 60, 60), Color.FromArgb(70, 130, 220), Color.FromArgb(80, 180, 90),
+        Color.FromArgb(140, 90, 210), Color.FromArgb(235, 120, 170), Color.FromArgb(235, 200, 60), Color.FromArgb(240, 240, 240)
+    };
+    Color baseColor = Orange;     // color elegido
+    readonly ToolStripMenuItem[] miPresets = new ToolStripMenuItem[PresetNames.Length];
+    readonly ToolStripMenuItem miCustom;
+    static readonly string DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MascotaClaude");
+    static readonly string ConfigPath = Path.Combine(DataDir, "config.txt");
 
     // Caché de las areas de trabajo (se refresca al cambiar las pantallas y cada pocos segundos)
     Rectangle[] areas;
@@ -101,6 +116,19 @@ class PetForm : Form {
         // ---------- Menu click derecho ----------
         ContextMenuStrip menu = new ContextMenuStrip();
         menu.Items.Add("Abrir Claude", null, delegate { FocusClaude(); });
+
+        ToolStripMenuItem miColor = new ToolStripMenuItem("Color");
+        for (int i = 0; i < PresetNames.Length; i++) {
+            Color c = PresetColors[i];
+            miPresets[i] = new ToolStripMenuItem(PresetNames[i], Swatch(c));
+            miPresets[i].Click += delegate { SetFixedColor(c); };
+            miColor.DropDownItems.Add(miPresets[i]);
+        }
+        miCustom = new ToolStripMenuItem("Personalizado...");
+        miCustom.Click += delegate { PickCustomColor(); };
+        miColor.DropDownItems.Add(miCustom);
+        menu.Items.Add(miColor);
+
         miStay = new ToolStripMenuItem("Quieta");
         miStay.Click += delegate {
             paused = !paused;
@@ -110,6 +138,10 @@ class PetForm : Form {
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Salir", null, delegate { timer.Stop(); Close(); });
         ContextMenuStrip = menu;
+
+        LoadConfig();
+        SetBodyColor(baseColor);
+        UpdateColorChecks();
 
         SystemEvents.DisplaySettingsChanged += OnDisplayChanged;
 
@@ -124,9 +156,70 @@ class PetForm : Form {
     protected override void Dispose(bool disposing) {
         if (disposing) {
             SystemEvents.DisplaySettingsChanged -= OnDisplayChanged;
-            timer.Dispose(); bOrange.Dispose(); bBlack.Dispose();
+            timer.Dispose(); bBody.Dispose(); bBlack.Dispose();
         }
         base.Dispose(disposing);
+    }
+
+    // ---------- Color ----------
+    static Bitmap Swatch(Color c) {
+        Bitmap b = new Bitmap(16, 16);
+        using (Graphics g = Graphics.FromImage(b)) {
+            using (SolidBrush br = new SolidBrush(c)) g.FillRectangle(br, 1, 1, 14, 14);
+            g.DrawRectangle(Pens.Gray, 1, 1, 13, 13);
+        }
+        return b;
+    }
+
+    void SetBodyColor(Color c) {
+        // el magenta exacto es el color transparente de la ventana: evitarlo
+        if (c.ToArgb() == Key.ToArgb()) c = Color.FromArgb(254, 0, 255);
+        if (bBody.Color.ToArgb() == c.ToArgb()) return;
+        SolidBrush old = bBody;
+        bBody = new SolidBrush(c);
+        old.Dispose();
+        Invalidate();
+    }
+
+    void SetFixedColor(Color c) {
+        baseColor = c;
+        SetBodyColor(c); UpdateColorChecks(); SaveConfig();
+    }
+
+    void PickCustomColor() {
+        using (ColorDialog dlg = new ColorDialog()) {
+            dlg.FullOpen = true; dlg.Color = baseColor;
+            if (dlg.ShowDialog(this) == DialogResult.OK) SetFixedColor(dlg.Color);
+        }
+    }
+
+    void UpdateColorChecks() {
+        bool preset = false;
+        for (int i = 0; i < miPresets.Length; i++) {
+            bool on = PresetColors[i].ToArgb() == baseColor.ToArgb();
+            miPresets[i].Checked = on; preset |= on;
+        }
+        miCustom.Checked = !preset;
+    }
+
+    void LoadConfig() {
+        try {
+            if (!File.Exists(ConfigPath)) return;
+            foreach (string line in File.ReadAllLines(ConfigPath)) {
+                int eq = line.IndexOf('=');
+                if (eq < 0) continue;
+                string k = line.Substring(0, eq).Trim(), v = line.Substring(eq + 1).Trim();
+                if (k == "color") baseColor = Color.FromArgb(255, Color.FromArgb(int.Parse(v, NumberStyles.HexNumber)));
+            }
+        } catch { }
+    }
+
+    void SaveConfig() {
+        try {
+            Directory.CreateDirectory(DataDir);
+            File.WriteAllText(ConfigPath,
+                "color=" + (baseColor.ToArgb() & 0xFFFFFF).ToString("X6") + "\r\n");
+        } catch { }
     }
 
     // ---------- Traer Claude al frente ----------
@@ -207,7 +300,7 @@ class PetForm : Form {
             for (int x = 0; x < row.Length; x++) {
                 char c = row[x];
                 if (c == '.') continue;
-                Brush brush = (c == 'E' && eyes) ? bBlack : bOrange;
+                Brush brush = (c == 'E' && eyes) ? bBlack : bBody;
                 g.FillRectangle(brush, offX + x * PX, offY + y * PX, PX, PX);
             }
         }
