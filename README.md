@@ -11,7 +11,7 @@ Una mascota virtual de escritorio para Windows, hecha en C# + Windows Forms. Es 
 - **Click**: da un saltito y trae la app de Claude al frente (la abre si no está abierta).
 - **Rueda del ratón** encima de ella: la hace crecer o encoger.
 - **Click derecho**: menú con *Abrir Claude*, *Color*, *Quieta / Pasear* y *Salir*.
-- **Color**: click derecho → *Color* para elegir uno predefinido (naranja Claude, rojo, azul, verde, morado, rosa, amarillo, blanco) o uno personalizado. La elección se guarda.
+- **Color**: click derecho → *Color* para elegir uno predefinido (naranja Claude, rojo, azul, verde, morado, rosa, amarillo, blanco) o uno personalizado, o el modo *Arcoíris*, en el que va cambiando de color sin parar. La elección se guarda.
 
 ## Requisitos
 

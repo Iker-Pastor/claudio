@@ -87,7 +87,9 @@ class PetForm : Form {
     };
     Color baseColor = Orange;     // color elegido
     readonly ToolStripMenuItem[] miPresets = new ToolStripMenuItem[PresetNames.Length];
-    readonly ToolStripMenuItem miCustom;
+    readonly ToolStripMenuItem miCustom, miRainbow;
+    bool rainbow = false;         // modo arcoiris: el color va rotando
+    double hue = 0;               // tono actual del arcoiris (0..360)
     static readonly string DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MascotaClaude");
     static readonly string ConfigPath = Path.Combine(DataDir, "config.txt");
 
@@ -127,6 +129,10 @@ class PetForm : Form {
         miCustom = new ToolStripMenuItem("Personalizado...");
         miCustom.Click += delegate { PickCustomColor(); };
         miColor.DropDownItems.Add(miCustom);
+        miColor.DropDownItems.Add(new ToolStripSeparator());
+        miRainbow = new ToolStripMenuItem("Arcoíris", RainbowSwatch());
+        miRainbow.Click += delegate { rainbow = true; UpdateColorChecks(); SaveConfig(); };
+        miColor.DropDownItems.Add(miRainbow);
         menu.Items.Add(miColor);
 
         miStay = new ToolStripMenuItem("Quieta");
@@ -171,6 +177,30 @@ class PetForm : Form {
         return b;
     }
 
+    static Bitmap RainbowSwatch() {
+        Bitmap b = new Bitmap(16, 16);
+        using (Graphics g = Graphics.FromImage(b)) {
+            for (int x = 0; x < 14; x++)
+                using (SolidBrush br = new SolidBrush(FromHue(x * 360.0 / 14))) g.FillRectangle(br, 1 + x, 1, 1, 14);
+            g.DrawRectangle(Pens.Gray, 1, 1, 13, 13);
+        }
+        return b;
+    }
+
+    // Color vivo del tono h (grados). Saturacion < 1, asi que nunca da el magenta transparente.
+    static Color FromHue(double h) {
+        const double s = 0.65, v = 0.95;
+        double c = v * s, x = c * (1 - Math.Abs((h / 60.0) % 2 - 1)), m = v - c;
+        double r, g, b;
+        if (h < 60) { r = c; g = x; b = 0; }
+        else if (h < 120) { r = x; g = c; b = 0; }
+        else if (h < 180) { r = 0; g = c; b = x; }
+        else if (h < 240) { r = 0; g = x; b = c; }
+        else if (h < 300) { r = x; g = 0; b = c; }
+        else { r = c; g = 0; b = x; }
+        return Color.FromArgb(R((r + m) * 255), R((g + m) * 255), R((b + m) * 255));
+    }
+
     void SetBodyColor(Color c) {
         // el magenta exacto es el color transparente de la ventana: evitarlo
         if (c.ToArgb() == Key.ToArgb()) c = Color.FromArgb(254, 0, 255);
@@ -182,7 +212,7 @@ class PetForm : Form {
     }
 
     void SetFixedColor(Color c) {
-        baseColor = c;
+        baseColor = c; rainbow = false;
         SetBodyColor(c); UpdateColorChecks(); SaveConfig();
     }
 
@@ -196,10 +226,11 @@ class PetForm : Form {
     void UpdateColorChecks() {
         bool preset = false;
         for (int i = 0; i < miPresets.Length; i++) {
-            bool on = PresetColors[i].ToArgb() == baseColor.ToArgb();
+            bool on = !rainbow && PresetColors[i].ToArgb() == baseColor.ToArgb();
             miPresets[i].Checked = on; preset |= on;
         }
-        miCustom.Checked = !preset;
+        miCustom.Checked = !rainbow && !preset;
+        miRainbow.Checked = rainbow;
     }
 
     void LoadConfig() {
@@ -210,6 +241,7 @@ class PetForm : Form {
                 if (eq < 0) continue;
                 string k = line.Substring(0, eq).Trim(), v = line.Substring(eq + 1).Trim();
                 if (k == "color") baseColor = Color.FromArgb(255, Color.FromArgb(int.Parse(v, NumberStyles.HexNumber)));
+                else if (k == "arcoiris") rainbow = v == "1";
             }
         } catch { }
     }
@@ -218,7 +250,8 @@ class PetForm : Form {
         try {
             Directory.CreateDirectory(DataDir);
             File.WriteAllText(ConfigPath,
-                "color=" + (baseColor.ToArgb() & 0xFFFFFF).ToString("X6") + "\r\n");
+                "color=" + (baseColor.ToArgb() & 0xFFFFFF).ToString("X6") + "\r\n" +
+                "arcoiris=" + (rainbow ? "1" : "0") + "\r\n");
         } catch { }
     }
 
@@ -522,6 +555,9 @@ class PetForm : Form {
     void OnTick(object sender, EventArgs e) {
         tick++;
         if (tick % 100 == 0) RefreshAreas();   // por si cambia la barra de tareas
+
+        // arcoiris: cambia de tono cada 3 ticks (~11 veces/s, una vuelta completa cada ~11 s)
+        if (rainbow && tick % 3 == 0) { hue = (hue + 4) % 360; SetBodyColor(FromHue(hue)); }
 
         // parpadeo
         if (blink > 0) blink--; else if (rand.Next(150) == 0) blink = 5;
