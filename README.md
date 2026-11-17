@@ -1,6 +1,6 @@
 # Mascota Claude 🟧
 
-Una mascota virtual de escritorio para Windows, hecha en PowerShell + Windows Forms. Es un pequeño bicho naranja de estilo pixel-art que vive encima de tus ventanas, pasea por la pantalla y reacciona al ratón.
+Una mascota virtual de escritorio para Windows, hecha en C# + Windows Forms. Es un pequeño bicho naranja de estilo pixel-art que vive encima de tus ventanas, pasea por la pantalla y reacciona al ratón.
 
 ## Características
 
@@ -15,11 +15,12 @@ Una mascota virtual de escritorio para Windows, hecha en PowerShell + Windows Fo
 ## Requisitos
 
 - Windows 10 u 11
-- Windows PowerShell 5.1 (incluido en Windows). No requiere instalar nada más.
+- .NET Framework 4 (incluido en Windows). No requiere instalar nada más: el compilador de C# que trae Windows la compila sola la primera vez.
+- Consumo aproximado: ~30 MB de RAM y ~1-2 % de un núcleo de CPU.
 
 ## Uso
 
-Haz doble clic en `mascota.vbs` (lanza la mascota sin ventana de consola).
+Haz doble clic en `mascota.vbs`. La primera vez (y cada vez que modifiques `mascota.cs`) compila `mascota.exe` y después lo lanza sin ventana de consola.
 
 ### Arranque automático con Windows
 
@@ -32,18 +33,18 @@ Haz doble clic en `mascota.vbs` (lanza la mascota sin ventana de consola).
 
 | Archivo | Descripción |
 |---|---|
-| `mascota.ps1` | Código principal (sprite, física, animación, menú) |
-| `mascota.vbs` | Lanzador sin consola |
+| `mascota.cs` | Código principal (sprite, física, animación, menú) |
+| `mascota.vbs` | Lanzador: compila `mascota.exe` si hace falta y lo arranca |
 | `activar-inicio.bat` / `desactivar-inicio.bat` | Gestión del arranque automático |
 
 ## Personalización
 
-En la parte superior de `mascota.ps1` puedes ajustar:
+En la parte superior de `mascota.cs` puedes ajustar (se recompila sola al relanzar `mascota.vbs`; cierra antes la mascota abierta):
 
-- `$PX`: tamaño de cada "píxel" del sprite.
-- `$body`, `$legsA`, `$legsB`: el sprite (cada carácter es un píxel; `X` = cuerpo, `E` = ojo, `.` = vacío).
-- `$orange` / `$black`: colores.
-- `$GRAV`, `$MAXV`, `$BOUNCE`: gravedad, velocidad máxima de lanzamiento y rebote.
+- `PX`: tamaño de cada "píxel" del sprite.
+- `Body`, `LegsA`, `LegsB`: el sprite (cada carácter es un píxel; `X` = cuerpo, `E` = ojo, `.` = vacío).
+- `Orange` / `Black`: colores.
+- `GRAV`, `MAXV`, `BOUNCE`: gravedad, velocidad máxima de lanzamiento y rebote.
 
 ## Notas
 
