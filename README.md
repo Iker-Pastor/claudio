@@ -18,6 +18,10 @@ Una mascota virtual de escritorio para Windows, hecha en C# + Windows Forms. Es 
 - **Dormir**: si no hay actividad en el equipo ~5 min (o es de noche, 01:00-07:00, con ~1 min de inactividad) se deja caer al suelo si estaba en una pared o el techo, se tumba con los ojos cerrados y "Zzz". Se despierta al volver a usar el ratón o el teclado.
 - **Ojos que miran**: las pupilas se desplazan hacia el cursor y, muy de vez en cuando, si el cursor está cerca en su mismo suelo, lo persigue unos segundos.
 
+- **Subirse a ventanas**: camina por el borde superior de las ventanas visibles de otras apps (ignora minimizadas, ocultas, sin título, "cloaked" y maximizadas). Si la ventana se mueve, la acompaña; si se cierra, se minimiza o la tapa otra, cae con física. Al caer puede aterrizar en una ventana y a veces salta a una cercana. Opción de menú *Subir a ventanas* (se guarda). La lista de ventanas se refresca ~1 vez por segundo.
+- **Reacciona a eventos** (bocadillo + ánimo): batería baja (<20 % sin cargador, una vez por bajada), cargador conectado, "¡Hora de salir!" a las 15:00 de lunes a viernes y "¡Claude te ha respondido!" cuando la ventana de Claude parpadea en la barra de tareas (hook `HSHELL_FLASH`; depende de que la app de Claude pida atención al terminar, y se ignora si pasan menos de 15 s desde el último aviso).
+- **Recordatorios**: menú *Recordatorios* con *Pomodoro* (25 min de trabajo / 5 de descanso; desmárcalo para pararlo), *Beber agua* (cada 60 min), *Pausa activa* (cada 50 min) y *Gimnasio a las 15:30 (L-V)*. Agua, pausa activa y gimnasio se guardan; el Pomodoro no (empieza parado). Los avisos salen aunque silencies los bocadillos, duran más y no se pisan con los bocadillos normales; si está dormida, esperan a que despierte.
+
 ## Requisitos
 
 - Windows 10 u 11

@@ -13,6 +13,7 @@
 // Se compila con el csc.exe que trae Windows (.NET Framework 4, C# 5): mascota.vbs lo hace solo.
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -34,10 +35,32 @@ static class Win {
 
     [StructLayout(LayoutKind.Sequential)]
     public struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+
+    // Ventanas de otras apps (subirse a ellas) y aviso de parpadeo en la barra de tareas
+    public delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr h);
+    [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr h);
+    [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int idx);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] public static extern bool RegisterShellHookWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool DeregisterShellHookWindow(IntPtr h);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern uint RegisterWindowMessage(string s);
+    [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT r, int size);
+    [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int v, int size);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT { public int L, T, R, B; }
 }
 
 enum Mode { Floor, WallL, WallR, Ceiling, Air }
 enum Mood { Normal, Feliz, Aburrida, Mareada, Dormida }
+
+// Ventana de otra app: caja visible y si se puede andar por su borde superior
+class WinInfo { public IntPtr H; public Rectangle R; public bool Usable; }
 
 // ---------- Bocadillo de texto: ventana sin borde, topmost, que no roba el foco ni capta clicks ----------
 class Bubble : Form {
@@ -279,6 +302,20 @@ class PetForm : Form {
     static readonly string[] HeartGlyph = { ".X.X.", "XXXXX", ".XXX.", "..X.." };
     static readonly string[] ZGlyph = { "XXX", "..X", ".X.", "X..", "XXX" };
 
+    // ---------- Ventanas, avisos y recordatorios ----------
+    const int POMO_WORK_MIN = 25, POMO_BREAK_MIN = 5, WATER_MIN = 60, STRETCH_MIN = 50;
+    readonly uint ownPid = (uint)Process.GetCurrentProcess().Id;
+    readonly List<WinInfo> wins = new List<WinInfo>();
+    readonly Win.EnumProc enumProc;
+    bool winsOn = true, onWin = false, jumping = false;
+    IntPtr perchHwnd; Rectangle perchRect;            // ventana sobre la que anda
+    ToolStripMenuItem miWins, miRem, miPomo, miWater, miStretch, miGym;
+    bool pomoOn, pomoWork, waterOn, stretchOn, gymOn;  // pomodoro no se guarda: solo agua, estirar y gimnasio
+    int pomoEnd, waterNext, stretchNext, leaveDay, gymDay;
+    bool bubbleImportant;
+    bool lowWarned; PowerLineStatus lastLine = PowerLineStatus.Unknown;
+    uint shellMsg; int lastFlashMs;
+
     // Caché de las areas de trabajo (se refresca al cambiar las pantallas y cada pocos segundos)
     Rectangle[] areas;
     // Lo ultimo que se dibujo: solo se repinta si cambia
@@ -342,12 +379,60 @@ class PetForm : Form {
             SaveConfig();
         };
         menu.Items.Add(miBubbles);
+
+        miWins = new ToolStripMenuItem("Subir a ventanas");
+        miWins.CheckOnClick = true;
+        miWins.Checked = true;
+        miWins.CheckedChanged += delegate {
+            winsOn = miWins.Checked;
+            if (winsOn) RefreshWindows(); else { wins.Clear(); onWin = false; }
+            SaveConfig();
+        };
+        menu.Items.Add(miWins);
+
+        miRem = new ToolStripMenuItem("Recordatorios");
+        miPomo = new ToolStripMenuItem("Pomodoro (" + POMO_WORK_MIN + "/" + POMO_BREAK_MIN + ")");
+        miPomo.CheckOnClick = true;
+        miPomo.CheckedChanged += delegate {
+            pomoOn = miPomo.Checked;
+            if (pomoOn) {
+                pomoWork = true; pomoEnd = Environment.TickCount + POMO_WORK_MIN * 60000;
+                SayText("Pomodoro en marcha: " + POMO_WORK_MIN + " min de trabajo.", true);
+            } else SayText("Pomodoro parado.", true);
+        };
+        miWater = new ToolStripMenuItem("Beber agua (cada " + WATER_MIN + " min)");
+        miWater.CheckOnClick = true;
+        miWater.CheckedChanged += delegate {
+            waterOn = miWater.Checked;
+            if (waterOn) waterNext = Environment.TickCount + WATER_MIN * 60000;
+            SaveConfig();
+        };
+        miStretch = new ToolStripMenuItem("Pausa activa (cada " + STRETCH_MIN + " min)");
+        miStretch.CheckOnClick = true;
+        miStretch.CheckedChanged += delegate {
+            stretchOn = miStretch.Checked;
+            if (stretchOn) stretchNext = Environment.TickCount + STRETCH_MIN * 60000;
+            SaveConfig();
+        };
+        miGym = new ToolStripMenuItem("Gimnasio a las 15:30 (L-V)");
+        miGym.CheckOnClick = true;
+        miGym.CheckedChanged += delegate { gymOn = miGym.Checked; SaveConfig(); };
+        miRem.DropDownItems.Add(miPomo);
+        miRem.DropDownItems.Add(miWater);
+        miRem.DropDownItems.Add(miStretch);
+        miRem.DropDownItems.Add(miGym);
+        menu.Items.Add(miRem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Salir", null, delegate { timer.Stop(); SetTeams(false); Close(); });
         ContextMenuStrip = menu;
 
         LoadConfig();
+        enumProc = OnEnumWindow;
         miBubbles.Checked = bubblesOn;
+        miWins.Checked = winsOn;
+        miWater.Checked = waterOn; miStretch.Checked = stretchOn; miGym.Checked = gymOn;
+        int t0 = Environment.TickCount;
+        waterNext = t0 + WATER_MIN * 60000; stretchNext = t0 + STRETCH_MIN * 60000;
         lastActMs = Environment.TickCount; lastRealInput = (uint)Environment.TickCount;
         nextChatter = 6000 + rand.Next(9840);       // ~3-8 min (30 ms por tick)
         SetBodyColor(baseColor);
@@ -427,6 +512,7 @@ class PetForm : Form {
         ToolStripRenderer r = dark ? (ToolStripRenderer)new DarkRenderer() : new ToolStripProfessionalRenderer();
         menu.Renderer = r;
         miColor.DropDown.Renderer = r;
+        miRem.DropDown.Renderer = r;
     }
 
     void OnUserPreferenceChanged(object s, UserPreferenceChangedEventArgs e) {
@@ -509,6 +595,10 @@ class PetForm : Form {
                 if (k == "color") baseColor = Color.FromArgb(255, Color.FromArgb(int.Parse(v, NumberStyles.HexNumber)));
                 else if (k == "arcoiris") rainbow = v == "1";
                 else if (k == "bocadillos") bubblesOn = v != "0";
+                else if (k == "ventanas") winsOn = v != "0";
+                else if (k == "agua") waterOn = v == "1";
+                else if (k == "estirar") stretchOn = v == "1";
+                else if (k == "gimnasio") gymOn = v == "1";
             }
         } catch { }
     }
@@ -519,7 +609,11 @@ class PetForm : Form {
             File.WriteAllText(ConfigPath,
                 "color=" + (baseColor.ToArgb() & 0xFFFFFF).ToString("X6") + "\r\n" +
                 "arcoiris=" + (rainbow ? "1" : "0") + "\r\n" +
-                "bocadillos=" + (bubblesOn ? "1" : "0") + "\r\n");
+                "bocadillos=" + (bubblesOn ? "1" : "0") + "\r\n" +
+                "ventanas=" + (winsOn ? "1" : "0") + "\r\n" +
+                "agua=" + (waterOn ? "1" : "0") + "\r\n" +
+                "estirar=" + (stretchOn ? "1" : "0") + "\r\n" +
+                "gimnasio=" + (gymOn ? "1" : "0") + "\r\n");
         } catch { }
     }
 
@@ -705,6 +799,7 @@ class PetForm : Form {
             // si la coges por el centro, que cuelgue un poco igualmente
             if (Math.Sqrt(gx * gx + gy * gy) < 14) { gx = 0.0; gy = -14.0; }
             lastCX = p.X; lastCY = p.Y; mvx = 0; mvy = 0; tvx = 0; tvy = 0;
+            jumping = false; onWin = false;
             mode = Mode.Air;
         }
     }
@@ -869,6 +964,13 @@ class PetForm : Form {
         Rectangle a = NearestArea(R(cx), R(cy));
         if (Math.Abs(vx) + Math.Abs(vyA) < 5 && TryStick(2)) return;
 
+        // suelo: el de la pantalla o el borde superior de una ventana por la que acaba de caer
+        double fl = a.Bottom; int li = -1;
+        if (winsOn && vyA > 0) {
+            li = FindLanding(R(cx), R(cy - vyA + half), R(cy + half));
+            if (li >= 0) fl = wins[li].R.Top;
+        }
+
         // paredes: rebota solo si al otro lado no hay otra pantalla
         if (cx - half < a.Left && !InScreen(a.Left - 1, R(cy + half - 4))) {
             if (Math.Abs(vx) > 10) AddShake(1);
@@ -884,12 +986,16 @@ class PetForm : Form {
             cy = a.Top + half; vyA = Math.Abs(vyA) * bnc;
         }
         // suelo
-        if (cy + half >= a.Bottom) {
-            cy = a.Bottom - half;
-            if (Math.Abs(vyA) < 4 && Math.Abs(vx) < 3) {
+        if (cy + half >= fl) {
+            cy = fl - half;
+            if (li < 0) jumping = false;
+            if ((Math.Abs(vyA) < 4 && Math.Abs(vx) < 3) || (jumping && li >= 0)) {
                 // aterriza: se pone de pie y sigue paseando
                 mode = Mode.Floor; phi = 0; phiV = 0; vy = 0; hopV = 5.0;
+                if (li >= 0) SetPerch(li);
+                jumping = false;
                 if (vx > 0) dir = 1; else if (vx < 0) dir = -1;
+                vx = 0; vyA = 0;
             } else {
                 if (Math.Abs(vyA) > 10) AddShake(1);
                 phiV += vx * 0.008;      // al rodar por el suelo gira
@@ -940,19 +1046,215 @@ class PetForm : Form {
         }
     }
 
-    void Say(string[] pool) { SayText(pool[rand.Next(pool.Length)]); }
+    void Say(string[] pool) { SayText(pool[rand.Next(pool.Length)], false); }
 
-    void SayText(string t) {
-        if (!bubblesOn || mood == Mood.Dormida) return;
+    // important = recordatorios y avisos: salen aunque los bocadillos esten silenciados, duran mas
+    // y no los pisan los bocadillos normales.
+    void SayText(string t, bool important) {
+        if (!important) {
+            if (!bubblesOn || mood == Mood.Dormida) return;
+            if (bubbleImportant && bubbleTicks > 0) return;
+        }
+        bubbleImportant = important;
         bubble.SetText(t);
-        bubbleTicks = 100 + t.Length * 4;
+        bubbleTicks = important ? 330 + t.Length * 6 : 100 + t.Length * 4;
         UpdateBubble();
         if (!bubble.Visible) bubble.Show();
     }
 
     void HideBubble() {
-        bubbleTicks = 0;
+        bubbleTicks = 0; bubbleImportant = false;
         if (bubble.Visible) bubble.Hide();
+    }
+
+    // ---------- Avisos y recordatorios ----------
+    bool CanAlert() { return mood != Mood.Dormida; }
+
+    // Bocadillo importante + (opcional) cambio de animo. No hace nada si esta dormida.
+    bool Alert(string text, Mood m, int moodT) {
+        if (!CanAlert()) return false;
+        if (m != Mood.Normal) SetMood(m, moodT);
+        if (m == Mood.Feliz) hopV = 6.0;
+        SayText(text, true);
+        return true;
+    }
+
+    void CheckPower() {
+        try {
+            PowerStatus ps = SystemInformation.PowerStatus;
+            if ((ps.BatteryChargeStatus & BatteryChargeStatus.NoSystemBattery) != 0) return;
+            PowerLineStatus line = ps.PowerLineStatus;
+            float pct = ps.BatteryLifePercent;
+            if (line == PowerLineStatus.Online) {
+                lowWarned = false;
+                if (lastLine == PowerLineStatus.Offline) {
+                    if (!Alert("¡Cargador conectado! Gracias.", Mood.Feliz, 230)) return;   // reintenta al despertar
+                }
+            } else if (line == PowerLineStatus.Offline && pct <= 1f) {
+                if (pct >= 0.20f) lowWarned = false;
+                else if (!lowWarned) {
+                    if (Alert("Batería baja (" + (int)Math.Round(pct * 100) + "%). ¡Enchúfame al cargador!", Mood.Aburrida, 300)) lowWarned = true;
+                }
+            }
+            lastLine = line;
+        } catch { }
+    }
+
+    void Reminders() {
+        if (!CanAlert() || (bubbleImportant && bubbleTicks > 0)) return;
+        int now = Environment.TickCount;
+        DateTime dt = DateTime.Now;
+        bool weekday = dt.DayOfWeek != DayOfWeek.Saturday && dt.DayOfWeek != DayOfWeek.Sunday;
+        int dayKey = dt.Year * 1000 + dt.DayOfYear;
+        if (weekday && dt.Hour == 15 && dt.Minute < 10 && leaveDay != dayKey) {
+            leaveDay = dayKey; Alert("¡Hora de salir!", Mood.Feliz, 300); return;
+        }
+        if (gymOn && weekday && dt.Hour == 15 && dt.Minute >= 30 && dt.Minute < 40 && gymDay != dayKey) {
+            gymDay = dayKey; Alert("¡Hora de ir al gimnasio!", Mood.Feliz, 300); return;
+        }
+        if (pomoOn && now - pomoEnd >= 0) {
+            if (pomoWork) { pomoWork = false; pomoEnd = now + POMO_BREAK_MIN * 60000; Alert("¡Descanso de " + POMO_BREAK_MIN + " min! Levántate un poco.", Mood.Feliz, 300); }
+            else { pomoWork = true; pomoEnd = now + POMO_WORK_MIN * 60000; Alert("Se acabó el descanso: ¡otros " + POMO_WORK_MIN + " min de trabajo!", Mood.Normal, 0); }
+            return;
+        }
+        if (waterOn && now - waterNext >= 0) {
+            waterNext = now + WATER_MIN * 60000; Alert("Toca beber agua.", Mood.Normal, 0); return;
+        }
+        if (stretchOn && now - stretchNext >= 0) {
+            stretchNext = now + STRETCH_MIN * 60000; Alert("Pausa activa: levántate y estírate un poco.", Mood.Normal, 0); return;
+        }
+    }
+
+    // ---------- Subirse a ventanas ----------
+    bool WinState(IntPtr h, out Rectangle r) {
+        r = Rectangle.Empty;
+        if (!Win.IsWindow(h) || !Win.IsWindowVisible(h) || Win.IsIconic(h)) return false;
+        if (Win.GetWindowTextLength(h) == 0) return false;
+        if ((Win.GetWindowLong(h, -20) & (0x80 | 0x20)) != 0) return false;     // toolwindow / transparente a clicks
+        int cloaked;
+        if (Win.DwmGetWindowAttribute(h, 14, out cloaked, 4) == 0 && cloaked != 0) return false;   // DWMWA_CLOAKED
+        uint pid; Win.GetWindowThreadProcessId(h, out pid);
+        if (pid == ownPid) return false;
+        Win.RECT rc;
+        if (Win.DwmGetWindowAttribute(h, 9, out rc, 16) != 0 && !Win.GetWindowRect(h, out rc)) return false;   // 9 = EXTENDED_FRAME_BOUNDS
+        r = Rectangle.FromLTRB(rc.L, rc.T, rc.R, rc.B);
+        return true;
+    }
+
+    // Se puede andar por su borde superior: no maximizada, con sitio encima y a una altura razonable
+    bool WinUsable(IntPtr h, Rectangle r) {
+        if (r.Width < 120 || r.Height < 60 || Win.IsZoomed(h)) return false;
+        int mx = r.Left + r.Width / 2;
+        if (!InScreen(mx, r.Top)) return false;
+        Rectangle a = NearestArea(mx, r.Top);
+        return r.Top - H >= a.Top && r.Top <= a.Bottom - H - 4;
+    }
+
+    bool OnEnumWindow(IntPtr h, IntPtr l) {
+        Rectangle r;
+        if (WinState(h, out r)) { WinInfo w = new WinInfo(); w.H = h; w.R = r; w.Usable = WinUsable(h, r); wins.Add(w); }
+        return true;
+    }
+
+    // Lista de ventanas en orden Z (de arriba a abajo). Se llama ~1 vez por segundo.
+    void RefreshWindows() {
+        wins.Clear();
+        Win.EnumWindows(enumProc, IntPtr.Zero);
+        if (onWin) {
+            int idx = -1;
+            for (int i = 0; i < wins.Count; i++) if (wins[i].H == perchHwnd) { idx = i; break; }
+            if (idx < 0 || Covered(idx, Left + SZ / 2)) onWin = false;   // desaparecio o la tapa otra ventana: cae
+        }
+    }
+
+    // Esta tapado el borde superior de la ventana idx en la columna x por una ventana mas alta?
+    bool Covered(int idx, int x) {
+        int top = wins[idx].R.Top;
+        for (int j = 0; j < idx; j++) if (wins[j].R.Contains(x, top)) return true;
+        return false;
+    }
+
+    bool PerchValid(out Rectangle r) {
+        return WinState(perchHwnd, out r) && WinUsable(perchHwnd, r);
+    }
+
+    void SetPerch(int idx) {
+        perchHwnd = wins[idx].H;
+        Rectangle fr;
+        perchRect = WinState(perchHwnd, out fr) ? fr : wins[idx].R;
+        onWin = true; jumping = false;
+    }
+
+    // Ventana cuyo borde superior cruza los pies (prevFeet -> newFeet) en la columna ccx, o -1
+    int FindLanding(int ccx, int prevFeet, int newFeet) {
+        for (int i = 0; i < wins.Count; i++) {
+            WinInfo w = wins[i];
+            if (!w.Usable) continue;
+            int top = w.R.Top;
+            if (prevFeet <= top && newFeet >= top && ccx >= w.R.Left && ccx < w.R.Right && !Covered(i, ccx)) return i;
+        }
+        return -1;
+    }
+
+    int JumpTargetX(Rectangle r, int mx) {
+        return mx < r.Left ? r.Left + W / 2 + 25 : r.Right - W / 2 - 25;
+    }
+
+    // Salto parabolico hacia una ventana cercana. Devuelve false si no hay ninguna.
+    bool TryJump(int x, int y) {
+        if (!winsOn || wins.Count == 0) return false;
+        int feet = y + H, mx = x + W / 2;
+        List<int> cand = new List<int>();
+        for (int i = 0; i < wins.Count; i++) {
+            WinInfo w = wins[i];
+            if (!w.Usable || (onWin && w.H == perchHwnd) || w.R.Width < W + 60) continue;
+            int gap = mx < w.R.Left ? w.R.Left - mx : (mx >= w.R.Right ? mx - w.R.Right : 0);
+            int rise = feet - w.R.Top;
+            if (gap < 30 || gap > 320 || rise > 260 || rise < -400) continue;
+            if (Covered(i, JumpTargetX(w.R, mx))) continue;
+            cand.Add(i);
+        }
+        if (cand.Count == 0) return false;
+        Rectangle t = wins[cand[rand.Next(cand.Count)]].R;
+        double tx = JumpTargetX(t, mx);
+        double rs = feet - t.Top;
+        double apex = Math.Max(rs, 0) + 30;
+        double vy0 = -Math.Sqrt(2 * GRAV * apex);
+        double T = -vy0 / GRAV + Math.Sqrt(2 * (apex - rs) / GRAV);
+        double vxx = Math.Max(-30, Math.Min(30, (tx - mx) / T / 0.97));
+        cx = mx; cy = y + H / 2.0; vx = vxx; vyA = vy0;
+        phi = 0; phiV = 0; mode = Mode.Air; stepTop = null; onWin = false; jumping = true;
+        dir = vxx > 0 ? 1 : -1; hopV = 0;
+        return true;
+    }
+
+    // ---------- Claude parpadea en la barra de tareas (HSHELL_FLASH) ----------
+    protected override void OnHandleCreated(EventArgs e) {
+        base.OnHandleCreated(e);
+        try { shellMsg = Win.RegisterWindowMessage("SHELLHOOK"); Win.RegisterShellHookWindow(Handle); } catch { }
+    }
+
+    protected override void OnHandleDestroyed(EventArgs e) {
+        try { Win.DeregisterShellHookWindow(Handle); } catch { }
+        base.OnHandleDestroyed(e);
+    }
+
+    protected override void WndProc(ref Message m) {
+        if (shellMsg != 0 && (uint)m.Msg == shellMsg && (m.WParam.ToInt64() & 0xFFFF) == 0x8006) OnFlash(m.LParam);   // HSHELL_FLASH
+        base.WndProc(ref m);
+    }
+
+    void OnFlash(IntPtr h) {
+        try {
+            int now = Environment.TickCount;
+            if (now - lastFlashMs < 15000 && lastFlashMs != 0) return;
+            uint pid; Win.GetWindowThreadProcessId(h, out pid);
+            if (pid == 0 || pid == ownPid) return;
+            using (Process p = Process.GetProcessById((int)pid)) {
+                if (!string.Equals(p.ProcessName, "claude", StringComparison.OrdinalIgnoreCase)) return;
+            }
+            if (Alert("¡Claude te ha respondido!", Mood.Feliz, 300)) lastFlashMs = now;
+        } catch { }
     }
 
     void UpdateBubble() {
@@ -1045,6 +1347,10 @@ class PetForm : Form {
             if (bubbleTicks <= 0) Say(FrasesAburrida);
         }
 
+        if (winsOn && tick % 33 == 5 && (onWin || mood != Mood.Dormida)) RefreshWindows();
+        if (tick % 33 == 11) Reminders();
+        if (tick % 165 == 50) CheckPower();
+
         if (--nextChatter <= 0) {
             nextChatter = 6000 + rand.Next(9840);   // ~3-8 min
             if (mood != Mood.Dormida && !dragging && mode != Mode.Air && bubbleTicks <= 0) Say(FrasesAzar);
@@ -1072,7 +1378,7 @@ class PetForm : Form {
         }
 
         if (dragging) { wobX = 0; StepDrag(); InvalidateIfChanged(); UpdateBubble(); return; }
-        if (mode == Mode.Air) { wobX = 0; StepAir(); InvalidateIfChanged(); UpdateBubble(); return; }
+        if (mode == Mode.Air) { wobX = 0; onWin = false; StepAir(); InvalidateIfChanged(); UpdateBubble(); return; }
 
         // dormida: no se queda pegada a paredes/techo
         if (mood == Mood.Dormida && mode != Mode.Floor) { mode = Mode.Floor; vy = 0; stuck = false; stepTop = null; }
@@ -1082,6 +1388,14 @@ class PetForm : Form {
         int ccx = x + W / 2, midY = y + H / 2;
         Rectangle area = NearestArea(ccx, midY);
         int floor = area.Bottom - H;
+
+        // sobre una ventana: la acompaña si se mueve; si desaparece, se minimiza o la tapan, cae
+        if (mode != Mode.Floor) onWin = false;
+        if (onWin) {
+            Rectangle nr;
+            if (!winsOn || !PerchValid(out nr) || ccx < nr.Left || ccx >= nr.Right) onWin = false;
+            else { int pdx = nr.Left - perchRect.Left; x += pdx; ccx += pdx; perchRect = nr; floor = nr.Top - H; }
+        }
 
         // a veces (raro) persigue unos segundos al cursor si esta cerca, en su mismo suelo
         if (chaseTicks <= 0 && tick % 33 == 0 && mode == Mode.Floor && y >= floor && !paused
@@ -1109,6 +1423,12 @@ class PetForm : Form {
             if (mode == Mode.Floor) {
                 if (r < 3) walking = false;
                 else { walking = true; if (r < 5) dir = -dir; }
+                // a veces salta a una ventana cercana
+                if (winsOn && !paused && y >= floor && (mood == Mood.Normal || mood == Mood.Feliz) && rand.Next(4) == 0 && TryJump(x, y)) {
+                    nextDecision = 60 + rand.Next(150);
+                    InvalidateIfChanged(); UpdateBubble();
+                    return;
+                }
             } else {
                 walking = true;
                 if (r < 2 && !stuck) { mode = Mode.Floor; vy = 0; }          // se suelta y cae
@@ -1127,12 +1447,27 @@ class PetForm : Form {
             if (y < floor) {
                 // cayendo con gravedad
                 vy += GRAV;
-                y = Math.Min(floor, y + R(vy));
+                int ny = Math.Min(floor, y + R(vy));
+                if (!onWin && winsOn) {
+                    // puede aterrizar sobre una ventana
+                    int li = FindLanding(ccx, y + H, ny + H);
+                    if (li >= 0) { SetPerch(li); floor = perchRect.Top - H; ny = floor; }
+                }
+                y = ny;
                 if (y >= floor) { vy = 0; hopV = 4.0; }
             } else {
                 if (y > floor) hopV = 6.0;
                 y = floor;
-                if (moving) {
+                if (moving && onWin) {
+                    // andando por el borde de una ventana: al llegar al final se da la vuelta o se tira
+                    int newX = x + dir * st;
+                    int cn = newX + W / 2;
+                    if (cn < perchRect.Left || cn >= perchRect.Right) {
+                        if (rand.Next(3) == 0) { onWin = false; x = newX; }
+                        else dir = -dir;
+                    } else x = newX;
+                    NextFrame();
+                } else if (moving) {
                     int newX = x + dir * st;
                     int lead = dir > 0 ? newX + W - 1 : newX;
                     Rectangle la;
