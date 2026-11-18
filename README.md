@@ -22,6 +22,10 @@ Una mascota virtual de escritorio para Windows, hecha en C# + Windows Forms. Es 
 - **Reacciona a eventos** (bocadillo + ánimo): batería baja (<20 % sin cargador, una vez por bajada), cargador conectado, "¡Hora de salir!" a las 15:00 de lunes a viernes y "¡Claude te ha respondido!" cuando la ventana de Claude parpadea en la barra de tareas (hook `HSHELL_FLASH`; depende de que la app de Claude pida atención al terminar, y se ignora si pasan menos de 15 s desde el último aviso).
 - **Recordatorios**: menú *Recordatorios* con *Pomodoro* (25 min de trabajo / 5 de descanso; desmárcalo para pararlo), *Beber agua* (cada 60 min), *Pausa activa* (cada 50 min) y *Gimnasio a las 15:30 (L-V)*. Agua, pausa activa y gimnasio se guardan; el Pomodoro no (empieza parado). Los avisos salen aunque silencies los bocadillos, duran más y no se pisan con los bocadillos normales; si está dormida, esperan a que despierte.
 
+- **Animaciones**: se estira (brazos arriba), bosteza (boca abierta; siempre antes de dormirse y, si está aburrida, de vez en cuando) y saluda con un bracito (al hacer click, al despertarse y cuando el cursor se acerca tras ~2 min sin verlo). Las espontáneas son poco frecuentes y solo ocurren cuando está parada en el suelo o sobre una ventana.
+- **Partículas**: polvillo al aterrizar o rebotar fuerte y estrellitas mientras está mareada (los corazones son los del estado feliz). Se dibujan en una ventana overlay ligera y click-through que solo existe mientras quedan partículas (máx. 20), así el click sigue contando solo sobre el cuerpo.
+- **Accesorios por fecha**: gorro de Navidad (1 dic - 6 ene), sombrero de bruja (25-31 oct), gorro de fiesta (31 dic - 1 ene, tiene prioridad) y gafas de sol (julio y agosto). Giran con ella en paredes y techo y escalan con su tamaño. Menú *Accesorios*: *Automático*, *Ninguno* o forzar cada uno para probarlos (se guarda).
+
 ## Requisitos
 
 - Windows 10 u 11

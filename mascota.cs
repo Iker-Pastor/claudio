@@ -62,6 +62,64 @@ enum Mood { Normal, Feliz, Aburrida, Mareada, Dormida }
 // Ventana de otra app: caja visible y si se puede andar por su borde superior
 class WinInfo { public IntPtr H; public Rectangle R; public bool Usable; }
 
+enum Acc { Ninguno, Navidad, Bruja, Fiesta, Gafas }
+enum Anim { None, Stretch, Yawn, Wave }
+
+// Particula (polvo = 0, estrellita = 1) en coordenadas de pantalla
+class Particle { public double X, Y, VX, VY; public int Life, Max, Kind, Size; }
+
+// Ventana overlay ligera y click-through donde se dibujan las particulas (la de la mascota no cambia, asi el click solo cuenta sobre el cuerpo)
+class Fx : Form {
+    public List<Particle> Items;
+    readonly SolidBrush bDust = new SolidBrush(Color.FromArgb(205, 198, 185));
+    readonly SolidBrush bStar = new SolidBrush(Color.FromArgb(250, 215, 70));
+
+    public Fx() {
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        TopMost = true;
+        StartPosition = FormStartPosition.Manual;
+        BackColor = Color.Magenta;
+        TransparencyKey = Color.Magenta;
+        DoubleBuffered = true;
+    }
+
+    protected override bool ShowWithoutActivation { get { return true; } }
+
+    protected override CreateParams CreateParams {
+        get {
+            CreateParams cp = base.CreateParams;
+            cp.ExStyle |= 0x08000000 | 0x80 | 0x20;   // NOACTIVATE | TOOLWINDOW | TRANSPARENT (click-through)
+            return cp;
+        }
+    }
+
+    protected override void OnPaint(PaintEventArgs e) {
+        if (Items == null) return;
+        Graphics g = e.Graphics;
+        for (int i = 0; i < Items.Count; i++) {
+            Particle p = Items[i];
+            int x = (int)Math.Round(p.X) - Left, y = (int)Math.Round(p.Y) - Top;
+            if (p.Kind == 0) {
+                int s = Math.Max(1, p.Size * p.Life / p.Max);
+                g.FillRectangle(bDust, x - s / 2, y - s / 2, s, s);
+            } else {
+                int c = p.Size, h = c / 2;
+                g.FillRectangle(bStar, x - h, y - h, c, c);
+                g.FillRectangle(bStar, x - h - c, y - h, c, c);
+                g.FillRectangle(bStar, x - h + c, y - h, c, c);
+                g.FillRectangle(bStar, x - h, y - h - c, c, c);
+                g.FillRectangle(bStar, x - h, y - h + c, c, c);
+            }
+        }
+    }
+
+    protected override void Dispose(bool disposing) {
+        if (disposing) { bDust.Dispose(); bStar.Dispose(); }
+        base.Dispose(disposing);
+    }
+}
+
 // ---------- Bocadillo de texto: ventana sin borde, topmost, que no roba el foco ni capta clicks ----------
 class Bubble : Form {
     readonly Font font = new Font("Segoe UI", 9f);
@@ -316,6 +374,26 @@ class PetForm : Form {
     bool lowWarned; PowerLineStatus lastLine = PowerLineStatus.Unknown;
     uint shellMsg; int lastFlashMs;
 
+    // ---------- Animaciones, particulas y accesorios ----------
+    const int MAXP = 20;                              // maximo de particulas a la vez
+    static readonly string[] AccKeys = { "auto", "ninguno", "navidad", "bruja", "fiesta", "gafas" };
+    static readonly string[] AccNames = { "Automático", "Ninguno", "Gorro de Navidad", "Sombrero de bruja", "Gorro de fiesta", "Gafas de sol" };
+    Anim anim = Anim.None; int animT, animLen; bool pendingSleep;
+    int lastNearMs;
+    readonly List<Particle> parts = new List<Particle>();
+    Fx fx;
+    int accMode = -1;                                 // -1 = automatico (por fecha); si no, el valor de Acc
+    Acc accNow = Acc.Ninguno;
+    readonly ToolStripMenuItem[] miAccItems = new ToolStripMenuItem[6];
+    ToolStripMenuItem miAcc;
+    readonly SolidBrush bRed = new SolidBrush(Color.FromArgb(205, 40, 50));
+    readonly SolidBrush bWhite = new SolidBrush(Color.FromArgb(245, 245, 245));
+    readonly SolidBrush bPurple = new SolidBrush(Color.FromArgb(75, 45, 115));
+    readonly SolidBrush bGold = new SolidBrush(Color.FromArgb(245, 200, 60));
+    readonly SolidBrush bPink = new SolidBrush(Color.FromArgb(230, 70, 150));
+    readonly SolidBrush bBlue = new SolidBrush(Color.FromArgb(70, 150, 230));
+    Acc lastAcc = Acc.Ninguno; int lastAnimK = -1;
+
     // Caché de las areas de trabajo (se refresca al cambiar las pantallas y cada pocos segundos)
     Rectangle[] areas;
     // Lo ultimo que se dibujo: solo se repinta si cambia
@@ -390,6 +468,18 @@ class PetForm : Form {
         };
         menu.Items.Add(miWins);
 
+        miAcc = new ToolStripMenuItem("Accesorios");
+        for (int i = 0; i < miAccItems.Length; i++) {
+            int idx = i;
+            miAccItems[i] = new ToolStripMenuItem(AccNames[i]);
+            miAccItems[i].Click += delegate {
+                accMode = idx - 1;           // 0 -> automatico (-1); 1.. -> Acc.Ninguno, Navidad...
+                UpdateAcc(); UpdateAccChecks(); Invalidate(); SaveConfig();
+            };
+            miAcc.DropDownItems.Add(miAccItems[i]);
+        }
+        menu.Items.Add(miAcc);
+
         miRem = new ToolStripMenuItem("Recordatorios");
         miPomo = new ToolStripMenuItem("Pomodoro (" + POMO_WORK_MIN + "/" + POMO_BREAK_MIN + ")");
         miPomo.CheckOnClick = true;
@@ -428,6 +518,8 @@ class PetForm : Form {
 
         LoadConfig();
         enumProc = OnEnumWindow;
+        UpdateAcc(); UpdateAccChecks();
+        lastNearMs = Environment.TickCount;
         miBubbles.Checked = bubblesOn;
         miWins.Checked = winsOn;
         miWater.Checked = waterOn; miStretch.Checked = stretchOn; miGym.Checked = gymOn;
@@ -492,6 +584,8 @@ class PetForm : Form {
             keepTimer.Dispose();
             timer.Dispose(); bBody.Dispose(); bBlack.Dispose(); bHeart.Dispose(); bZ.Dispose();
             bubble.Dispose();
+            if (fx != null) fx.Dispose();
+            bRed.Dispose(); bWhite.Dispose(); bPurple.Dispose(); bGold.Dispose(); bPink.Dispose(); bBlue.Dispose();
         }
         base.Dispose(disposing);
     }
@@ -513,6 +607,7 @@ class PetForm : Form {
         menu.Renderer = r;
         miColor.DropDown.Renderer = r;
         miRem.DropDown.Renderer = r;
+        miAcc.DropDown.Renderer = r;
     }
 
     void OnUserPreferenceChanged(object s, UserPreferenceChangedEventArgs e) {
@@ -599,6 +694,7 @@ class PetForm : Form {
                 else if (k == "agua") waterOn = v == "1";
                 else if (k == "estirar") stretchOn = v == "1";
                 else if (k == "gimnasio") gymOn = v == "1";
+                else if (k == "accesorio") { int ai = Array.IndexOf(AccKeys, v); if (ai >= 0) accMode = ai - 1; }
             }
         } catch { }
     }
@@ -613,7 +709,8 @@ class PetForm : Form {
                 "ventanas=" + (winsOn ? "1" : "0") + "\r\n" +
                 "agua=" + (waterOn ? "1" : "0") + "\r\n" +
                 "estirar=" + (stretchOn ? "1" : "0") + "\r\n" +
-                "gimnasio=" + (gymOn ? "1" : "0") + "\r\n");
+                "gimnasio=" + (gymOn ? "1" : "0") + "\r\n" +
+                "accesorio=" + AccKeys[accMode + 1] + "\r\n");
         } catch { }
     }
 
@@ -686,8 +783,98 @@ class PetForm : Form {
     void InvalidateIfChanged() {
         float angle = CurAngle(); int hp = CurHop(); string legs = CurLegs(); bool eyes = blink <= 0;
         if (angle != lastAngle || hp != lastHop || !ReferenceEquals(legs, lastLegs) || eyes != lastEyes || PX != lastPX
-            || mood != lastMood || lookX != lastLX || lookY != lastLY || AnimPhase() != lastAnim || Lying() != lastLying)
+            || mood != lastMood || lookX != lastLX || lookY != lastLY || AnimPhase() != lastAnim || Lying() != lastLying
+            || AnimKey() != lastAnimK || accNow != lastAcc)
             Invalidate();
+    }
+
+    // Fotograma de la animacion actual (0 = ninguna); cambia solo cuando hay que repintar
+    int AnimKey() {
+        switch (anim) {
+            case Anim.Wave: return 10 + (animT / 5) % 2;
+            case Anim.Stretch: return 20 + (animT / 6) % 2;
+            case Anim.Yawn: return 30 + YawnStage();
+        }
+        return 0;
+    }
+
+    int YawnStage() { return (animT < 10 || animT >= animLen - 12) ? 0 : 1; }   // boca pequena / grande
+
+    void Row(Graphics g, int offX, int offY, int x0, int x1, int y, Brush b) {
+        g.FillRectangle(b, offX + x0 * PX, offY + y * PX, (x1 - x0 + 1) * PX, PX);
+    }
+
+    // Estirarse (brazos arriba), bostezar (boca) y saludar (bracito a la derecha)
+    void DrawAnim(Graphics g, int offX, int offY) {
+        if (anim == Anim.None || (mood != Mood.Normal && mood != Mood.Aburrida)) return;
+        switch (anim) {
+            case Anim.Wave:
+                Dot(g, offX, offY, 14, 3, bBody); Dot(g, offX, offY, 14, 2, bBody);
+                if ((animT / 5) % 2 == 0) Dot(g, offX, offY, 14, 1, bBody);
+                else { Dot(g, offX, offY, 15, 2, bBody); Dot(g, offX, offY, 15, 1, bBody); }
+                break;
+            case Anim.Stretch: {
+                int top = (animT / 6) % 2 == 0 ? 0 : 1;
+                for (int r = top; r <= 3; r++) { Dot(g, offX, offY, -1, r, bBody); Dot(g, offX, offY, 14, r, bBody); }
+                break;
+            }
+            case Anim.Yawn:
+                Row(g, offX, offY, 6, 7, 4, bBlack);
+                if (YawnStage() == 1) Row(g, offX, offY, 6, 7, 5, bBlack);
+                break;
+        }
+    }
+
+    // ---------- Accesorios por fecha ----------
+    static Acc AutoAcc(DateTime d) {
+        int m = d.Month, day = d.Day;
+        if ((m == 12 && day == 31) || (m == 1 && day == 1)) return Acc.Fiesta;   // prioridad
+        if (m == 12 || (m == 1 && day <= 6)) return Acc.Navidad;
+        if (m == 10 && day >= 25) return Acc.Bruja;
+        if (m == 7 || m == 8) return Acc.Gafas;
+        return Acc.Ninguno;
+    }
+
+    void UpdateAcc() { accNow = accMode < 0 ? AutoAcc(DateTime.Now) : (Acc)accMode; }
+
+    void UpdateAccChecks() {
+        for (int i = 0; i < miAccItems.Length; i++) miAccItems[i].Checked = (i == accMode + 1);
+    }
+
+    // Se dibujan en coordenadas del sprite (fila 0 = tope de la cabeza), asi giran y escalan con ella
+    void DrawAcc(Graphics g, int offX, int offY) {
+        switch (accNow) {
+            case Acc.Navidad:
+                Row(g, offX, offY, 2, 11, -1, bWhite);
+                Row(g, offX, offY, 3, 10, -2, bRed);
+                Row(g, offX, offY, 4, 9, -3, bRed);
+                Row(g, offX, offY, 5, 9, -4, bRed);
+                Row(g, offX, offY, 7, 9, -5, bRed);
+                Row(g, offX, offY, 10, 11, -5, bWhite);
+                break;
+            case Acc.Bruja:
+                Row(g, offX, offY, 0, 13, -1, bPurple);
+                Row(g, offX, offY, 4, 9, -2, bPurple);
+                Row(g, offX, offY, 6, 7, -2, bGold);
+                Row(g, offX, offY, 5, 8, -3, bPurple);
+                Row(g, offX, offY, 6, 8, -4, bPurple);
+                Row(g, offX, offY, 7, 8, -5, bPurple);
+                Row(g, offX, offY, 8, 9, -6, bPurple);
+                break;
+            case Acc.Fiesta:
+                Row(g, offX, offY, 4, 9, -1, bPink);
+                Row(g, offX, offY, 5, 8, -2, bBlue);
+                Row(g, offX, offY, 6, 7, -3, bPink);
+                Row(g, offX, offY, 6, 7, -4, bGold);
+                break;
+            case Acc.Gafas:
+                Row(g, offX, offY, 3, 5, 2, bBlack); Row(g, offX, offY, 3, 5, 3, bBlack);
+                Row(g, offX, offY, 8, 10, 2, bBlack); Row(g, offX, offY, 8, 10, 3, bBlack);
+                Row(g, offX, offY, 6, 7, 2, bBlack);
+                Dot(g, offX, offY, 2, 2, bBlack); Dot(g, offX, offY, 11, 2, bBlack);
+                Dot(g, offX, offY, 3, 2, bWhite); Dot(g, offX, offY, 8, 2, bWhite);   // brillo
+                break;
+        }
     }
 
     void Dot(Graphics g, int offX, int offY, int sx, int sy, Brush b) {
@@ -697,8 +884,10 @@ class PetForm : Form {
     // Ojos segun el animo. Columnas de los ojos: 4 y 9; filas 2-3 (coordenadas del sprite).
     void DrawEyes(Graphics g, int offX, int offY, bool open) {
         int[] cols = { 4, 9 };
+        Mood em = mood;   // al estirarse o bostezar cierra los ojos
+        if ((anim == Anim.Yawn || anim == Anim.Stretch) && (mood == Mood.Normal || mood == Mood.Aburrida)) em = Mood.Dormida;
         foreach (int ex in cols) {
-            switch (mood) {
+            switch (em) {
                 case Mood.Dormida:       // cerrados: una rayita
                     Dot(g, offX, offY, ex - 1, 3, bBlack); Dot(g, offX, offY, ex, 3, bBlack); Dot(g, offX, offY, ex + 1, 3, bBlack);
                     break;
@@ -756,6 +945,7 @@ class PetForm : Form {
         bool lying = Lying();
         lastAngle = angle; lastHop = hp; lastLegs = legs; lastEyes = eyes; lastPX = PX;
         lastMood = mood; lastLX = lookX; lastLY = lookY; lastAnim = AnimPhase(); lastLying = lying;
+        lastAnimK = AnimKey(); lastAcc = accNow;
 
         if (angle != 0) {
             g.TranslateTransform(SZ / 2f, SZ / 2f); g.RotateTransform(angle); g.TranslateTransform(-SZ / 2f, -SZ / 2f);
@@ -771,6 +961,8 @@ class PetForm : Form {
             }
         }
         DrawEyes(g, offX, offY, eyes);
+        DrawAnim(g, offX, offY);
+        DrawAcc(g, offX, offY);
         DrawDecor(g, offX, offY, lying);
     }
 
@@ -799,7 +991,7 @@ class PetForm : Form {
             // si la coges por el centro, que cuelgue un poco igualmente
             if (Math.Sqrt(gx * gx + gy * gy) < 14) { gx = 0.0; gy = -14.0; }
             lastCX = p.X; lastCY = p.Y; mvx = 0; mvy = 0; tvx = 0; tvy = 0;
-            jumping = false; onWin = false;
+            jumping = false; onWin = false; anim = Anim.None; pendingSleep = false;
             mode = Mode.Air;
         }
     }
@@ -853,6 +1045,7 @@ class PetForm : Form {
             if (Math.Abs(vx) + Math.Abs(vyA) < 10) TryStick(W * 0.6);
         } else {
             hopV = 7.0;   // saltito de alegria
+            StartAnim(Anim.Wave, 60);
             FocusClaude();
         }
     }
@@ -989,14 +1182,17 @@ class PetForm : Form {
         if (cy + half >= fl) {
             cy = fl - half;
             if (li < 0) jumping = false;
+            bool jl = jumping;
             if ((Math.Abs(vyA) < 4 && Math.Abs(vx) < 3) || (jumping && li >= 0)) {
                 // aterriza: se pone de pie y sigue paseando
                 mode = Mode.Floor; phi = 0; phiV = 0; vy = 0; hopV = 5.0;
                 if (li >= 0) SetPerch(li);
                 jumping = false;
+                if (jl) SpawnDust(cx, fl, 4);
                 if (vx > 0) dir = 1; else if (vx < 0) dir = -1;
                 vx = 0; vyA = 0;
             } else {
+                if (Math.Abs(vyA) > 6) SpawnDust(cx, fl, 6);
                 if (Math.Abs(vyA) > 10) AddShake(1);
                 phiV += vx * 0.008;      // al rodar por el suelo gira
                 vyA = -Math.Abs(vyA) * bnc;
@@ -1286,12 +1482,63 @@ class PetForm : Form {
         uint idle = (uint)Environment.TickCount - lastRealInput;
         int h = DateTime.Now.Hour;
         bool night = h >= 1 && h < 7;
+        bool want = idle >= SLEEP_MS || (night && idle >= NIGHT_IDLE_MS);
         if (mood != Mood.Dormida) {
-            if (!dragging && (idle >= SLEEP_MS || (night && idle >= NIGHT_IDLE_MS))) StartSleep();
+            if (!want || idle < 3000) pendingSleep = false;
+            else if (!dragging && !pendingSleep) {
+                // antes de dormirse, bosteza (al acabar la animacion se tumba)
+                StartAnim(Anim.Yawn, 70);
+                if (anim == Anim.Yawn) pendingSleep = true; else StartSleep();
+            }
         } else if (idle < 3000) Wake();
     }
 
+    // Empieza una animacion solo si esta de pie en el suelo/ventana y sin sobresaltos
+    void StartAnim(Anim a, int len) {
+        if (mode != Mode.Floor || dragging || mood == Mood.Dormida || mood == Mood.Mareada || vy != 0) return;
+        anim = a; animT = 0; animLen = len;
+    }
+
+    void SpawnDust(double x, double y, int n) {
+        for (int i = 0; i < n && parts.Count < MAXP; i++) {
+            int sgn = i % 2 == 0 ? -1 : 1;
+            Particle p = new Particle();
+            p.X = x + sgn * W * 0.25; p.Y = y - 2;
+            p.VX = sgn * (0.6 + rand.NextDouble() * 2.4); p.VY = -rand.NextDouble() * 1.2;
+            p.Life = p.Max = 14 + rand.Next(8); p.Kind = 0; p.Size = Math.Max(3, PX * 2 / 3);
+            parts.Add(p);
+        }
+    }
+
+    void SpawnStar() {
+        Particle p = new Particle();
+        p.X = Left + SZ / 2.0 + (rand.NextDouble() - 0.5) * W * 0.8;
+        p.Y = Top + M + H - 9 * PX + PX;
+        p.VX = (rand.NextDouble() - 0.5) * 0.8; p.VY = -0.5;
+        p.Life = p.Max = 28; p.Kind = 1; p.Size = Math.Max(2, PX / 2);
+        parts.Add(p);
+    }
+
+    // Particulas: solo hay ventana overlay mientras queda alguna viva
+    void UpdateParticles() {
+        if (mood == Mood.Mareada && tick % 5 == 0 && parts.Count < MAXP) SpawnStar();
+        for (int i = parts.Count - 1; i >= 0; i--) {
+            Particle p = parts[i];
+            p.X += p.VX; p.Y += p.VY;
+            if (p.Kind == 0) { p.VX *= 0.93; p.VY *= 0.95; } else p.VX *= 0.98;
+            if (--p.Life <= 0) parts.RemoveAt(i);
+        }
+        if (parts.Count == 0) { if (fx != null && fx.Visible) fx.Hide(); return; }
+        if (fx == null) { fx = new Fx(); fx.Items = parts; }
+        int e = SZ / 2;
+        Rectangle b = new Rectangle(Left - e, Top - e, SZ + 2 * e, SZ + 2 * e);
+        if (fx.Bounds != b) fx.Bounds = b;
+        if (!fx.Visible) fx.Show();
+        fx.Invalidate();
+    }
+
     void StartSleep() {
+        anim = Anim.None; pendingSleep = false;
         SetMood(Mood.Dormida, 0);
         chaseTicks = 0; walking = false; hopV = 0;
         HideBubble();
@@ -1305,6 +1552,7 @@ class PetForm : Form {
         lastActMs = Environment.TickCount;
         hopV = 6.0;
         Say(FrasesDespertar);
+        StartAnim(Anim.Wave, 70);
     }
 
     // Pupilas: 1 pixel de sprite hacia el cursor (en coordenadas del sprite, deshaciendo la rotacion)
@@ -1334,6 +1582,30 @@ class PetForm : Form {
         if (tick % 7 == 0) UpdateSleep();
         if (tick % 3 == 0) UpdateLook();
         int now = Environment.TickCount;
+
+        // animaciones (estirarse / bostezar / saludar)
+        if (anim != Anim.None) {
+            if (dragging || mode != Mode.Floor || mood == Mood.Dormida || mood == Mood.Mareada) { anim = Anim.None; pendingSleep = false; }
+            else if (++animT >= animLen) {
+                anim = Anim.None;
+                if (pendingSleep) { pendingSleep = false; StartSleep(); }
+            }
+        } else if (tick % 33 == 17 && mode == Mode.Floor && !dragging && vy == 0 && (!walking || paused) && chaseTicks <= 0) {
+            // de vez en cuando, parada en el suelo o en una ventana
+            if (mood == Mood.Normal && rand.Next(150) == 0) StartAnim(Anim.Stretch, 60);
+            else if (mood == Mood.Aburrida && rand.Next(10) == 0) StartAnim(Anim.Yawn, 70);
+        }
+        // saluda si el cursor se acerca tras un rato sin verlo
+        if (tick % 11 == 3) {
+            Point cp = Cursor.Position;
+            double ddx = cp.X - (Left + SZ / 2.0), ddy = cp.Y - (Top + SZ / 2.0);
+            if (ddx * ddx + ddy * ddy < 9.0 * W * W) {
+                if (now - lastNearMs > 120000 && anim == Anim.None && (mood == Mood.Normal || mood == Mood.Aburrida)) StartAnim(Anim.Wave, 70);
+                lastNearMs = now;
+            }
+        }
+        if (tick % 1000 == 3) UpdateAcc();
+        UpdateParticles();
 
         if (moodTicks > 0 && --moodTicks == 0) SetMood(Mood.Normal, 0);
 
@@ -1439,7 +1711,7 @@ class PetForm : Form {
             speed = 1 + rand.Next(3);
             nextDecision = 60 + rand.Next(150);
         }
-        bool moving = walking && !paused && mood != Mood.Dormida;
+        bool moving = walking && !paused && mood != Mood.Dormida && anim == Anim.None;
         int st = MoodStep();
 
         if (mode == Mode.Floor) {
@@ -1454,7 +1726,7 @@ class PetForm : Form {
                     if (li >= 0) { SetPerch(li); floor = perchRect.Top - H; ny = floor; }
                 }
                 y = ny;
-                if (y >= floor) { vy = 0; hopV = 4.0; }
+                if (y >= floor) { if (vy > 5) SpawnDust(ccx, y + H, 5); vy = 0; hopV = 4.0; }
             } else {
                 if (y > floor) hopV = 6.0;
                 y = floor;
