@@ -7,12 +7,15 @@
 // - Rueda del raton encima: crece / encoge
 // - Click derecho: menu (Abrir Claude / Color / Quieta-Pasear / Salir)
 // - Color: predefinidos o personalizado (se guarda)
+// - Animos (normal / feliz / aburrida / mareada / dormida), bocadillos de texto,
+//   ojos que siguen al raton y sueno cuando no hay actividad (o de noche)
 //
 // Se compila con el csc.exe que trae Windows (.NET Framework 4, C# 5): mascota.vbs lo hace solo.
 
 using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -34,6 +37,90 @@ static class Win {
 }
 
 enum Mode { Floor, WallL, WallR, Ceiling, Air }
+enum Mood { Normal, Feliz, Aburrida, Mareada, Dormida }
+
+// ---------- Bocadillo de texto: ventana sin borde, topmost, que no roba el foco ni capta clicks ----------
+class Bubble : Form {
+    readonly Font font = new Font("Segoe UI", 9f);
+    static readonly Color Ink = Color.FromArgb(40, 40, 40);
+    const int PAD = 7, TAIL = 7;
+    string text = "";
+    bool tailDown = true;
+    int tailX = 20, bw = 40, bh = 24;
+    GraphicsPath shape;
+
+    public Bubble() {
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        TopMost = true;
+        StartPosition = FormStartPosition.Manual;
+        BackColor = Color.White;
+        Opacity = 0.97;               // ventana "layered": permite el click-through
+        DoubleBuffered = true;
+    }
+
+    protected override bool ShowWithoutActivation { get { return true; } }
+
+    protected override CreateParams CreateParams {
+        get {
+            CreateParams cp = base.CreateParams;
+            cp.ExStyle |= 0x08000000 | 0x80 | 0x20;   // NOACTIVATE | TOOLWINDOW | TRANSPARENT (click-through)
+            return cp;
+        }
+    }
+
+    public void SetText(string t) {
+        if (t == text) return;
+        text = t; Rebuild();
+    }
+
+    void Rebuild() {
+        Size ts = TextRenderer.MeasureText(text, font, new Size(190, 0), TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
+        bw = ts.Width + 2 + 2 * PAD; bh = ts.Height + 2 * PAD;
+        ClientSize = new Size(bw, bh + TAIL);
+        int top = tailDown ? 0 : TAIL;
+        int r = 8;
+        Rectangle rc = new Rectangle(0, top, bw - 1, bh - 1);
+        GraphicsPath p = new GraphicsPath(FillMode.Winding);
+        p.AddArc(rc.Left, rc.Top, r * 2, r * 2, 180, 90);
+        p.AddArc(rc.Right - r * 2, rc.Top, r * 2, r * 2, 270, 90);
+        p.AddArc(rc.Right - r * 2, rc.Bottom - r * 2, r * 2, r * 2, 0, 90);
+        p.AddArc(rc.Left, rc.Bottom - r * 2, r * 2, r * 2, 90, 90);
+        p.CloseFigure();
+        int tx = Math.Max(PAD + 5, Math.Min(bw - PAD - 5, tailX));
+        if (tailDown) p.AddPolygon(new Point[] { new Point(tx - 5, bh - 1), new Point(tx + 5, bh - 1), new Point(tx, bh - 1 + TAIL) });
+        else p.AddPolygon(new Point[] { new Point(tx - 5, top), new Point(tx + 5, top), new Point(tx, 0) });
+        Region old = Region;
+        Region = new Region(p);
+        if (old != null) old.Dispose();
+        if (shape != null) shape.Dispose();
+        shape = p;
+        Invalidate();
+    }
+
+    // Se coloca encima de la mascota (o debajo si no cabe arriba). pet = caja visible en pantalla.
+    public void Follow(Rectangle pet, Rectangle area) {
+        bool down = pet.Top - (bh + TAIL) - 2 >= area.Top;
+        int x = pet.Left + pet.Width / 2 - bw / 2;
+        x = Math.Max(area.Left, Math.Min(area.Right - bw, x));
+        int tx = pet.Left + pet.Width / 2 - x;
+        if (down != tailDown || Math.Abs(tx - tailX) > 3) { tailDown = down; tailX = tx; Rebuild(); }
+        int y = down ? pet.Top - bh - TAIL - 2 : pet.Bottom + 2;
+        if (x != Left || y != Top) Location = new Point(x, y);
+    }
+
+    protected override void OnPaint(PaintEventArgs e) {
+        if (shape != null) using (Pen p = new Pen(Color.FromArgb(150, 150, 150))) e.Graphics.DrawPath(p, shape);
+        TextRenderer.DrawText(e.Graphics, text, font,
+            new Rectangle(PAD, (tailDown ? 0 : TAIL) + PAD, bw - 2 * PAD + 2, bh - 2 * PAD), Ink,
+            TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.Left | TextFormatFlags.Top);
+    }
+
+    protected override void Dispose(bool disposing) {
+        if (disposing) { font.Dispose(); if (shape != null) shape.Dispose(); }
+        base.Dispose(disposing);
+    }
+}
 
 // ---------- Menu en modo oscuro ----------
 class DarkColors : ProfessionalColorTable {
@@ -161,10 +248,42 @@ class PetForm : Form {
     static readonly string DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MascotaClaude");
     static readonly string ConfigPath = Path.Combine(DataDir, "config.txt");
 
+    // ---------- Animo, bocadillos, sueno y mirada ----------
+    // Frases de los bocadillos: edita estas listas a tu gusto.
+    static readonly string[] FrasesAzar = {
+        "¿Qué tal vas?", "Aquí sigo, vigilando.", "¿Has bebido agua?", "Estírate un poquito.",
+        "Me gusta este rincón.", "¿Hacemos algo?", "Qué buen día para pasear.", "Tic tac, tic tac...",
+        "Hoy te veo con ganas.", "¿Un descanso?"
+    };
+    static readonly string[] FrasesLanzada = { "¡Wiiii!", "¡Aaaah!", "¡Voy volando!", "¡Cuidado!", "¡Otra vez!" };
+    static readonly string[] FrasesDespertar = { "¡Buenas!", "Mmm... ya estoy aquí.", "¿Ya has vuelto?", "Qué bien he dormido.", "Hola otra vez." };
+    static readonly string[] FrasesCaricia = { "Qué a gusto...", "Me gusta eso.", "Jiji, cosquillas.", "Sigue, sigue.", "Soy feliz." };
+    static readonly string[] FrasesMareo = { "Uf, qué mareo...", "Todo da vueltas...", "Necesito sentarme.", "Ay, mi cabeza." };
+    static readonly string[] FrasesAburrida = { "*suspiro*", "Qué aburrimiento...", "¿Hay alguien ahí?", "Hmpf..." };
+    const int BORED_MS = 600000;                  // sin interactuar con ella -> aburrida (10 min)
+    const uint SLEEP_MS = 300000;                 // sin entrada en el sistema -> dormida (5 min)
+    const uint NIGHT_IDLE_MS = 60000;             // de noche (01:00-07:00) basta 1 min sin entrada
+    Mood mood = Mood.Normal; int moodTicks = 0;
+    readonly Bubble bubble = new Bubble();
+    bool bubblesOn = true; int bubbleTicks = 0, nextChatter, nextSigh;
+    ToolStripMenuItem miBubbles;
+    int lastActMs;                                 // ultima interaccion con la mascota
+    uint lastRealInput, lastSeenInput, nudgeAt; bool hasNudge;   // ultima entrada real del usuario (sin contar el Nudge de Teams)
+    int lookX, lookY;                              // desplazamiento de las pupilas (-1, 0, 1)
+    int chaseTicks = 0;                            // persiguiendo el cursor
+    int wobX = 0;                                  // tambaleo (mareada)
+    int caressN = 0, lastSign = 0, lastMoveMs = 0, lastMX = 0;
+    int shakeScore = 0, shakeStamp = 0;
+    readonly SolidBrush bHeart = new SolidBrush(Color.FromArgb(240, 90, 130));
+    readonly SolidBrush bZ = new SolidBrush(Color.FromArgb(110, 130, 200));
+    static readonly string[] HeartGlyph = { ".X.X.", "XXXXX", ".XXX.", "..X.." };
+    static readonly string[] ZGlyph = { "XXX", "..X", ".X.", "X..", "XXX" };
+
     // Caché de las areas de trabajo (se refresca al cambiar las pantallas y cada pocos segundos)
     Rectangle[] areas;
     // Lo ultimo que se dibujo: solo se repinta si cambia
     float lastAngle = float.NaN; int lastHop = -1; string lastLegs = null; bool lastEyes; int lastPX = -1;
+    Mood lastMood = Mood.Normal; int lastLX, lastLY, lastAnim = -1; bool lastLying;
 
     public PetForm() {
         W = Body[0].Length * PX; H = W; SZ = W + 2 * M;
@@ -214,11 +333,23 @@ class PetForm : Form {
         miTeams.Checked = true;
         miTeams.CheckedChanged += delegate { SetTeams(miTeams.Checked); };
         menu.Items.Add(miTeams);
+        miBubbles = new ToolStripMenuItem("Bocadillos");
+        miBubbles.CheckOnClick = true;
+        miBubbles.Checked = true;
+        miBubbles.CheckedChanged += delegate {
+            bubblesOn = miBubbles.Checked;
+            if (!bubblesOn) HideBubble();
+            SaveConfig();
+        };
+        menu.Items.Add(miBubbles);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Salir", null, delegate { timer.Stop(); SetTeams(false); Close(); });
         ContextMenuStrip = menu;
 
         LoadConfig();
+        miBubbles.Checked = bubblesOn;
+        lastActMs = Environment.TickCount; lastRealInput = (uint)Environment.TickCount;
+        nextChatter = 6000 + rand.Next(9840);       // ~3-8 min (30 ms por tick)
         SetBodyColor(baseColor);
         UpdateColorChecks();
 
@@ -256,6 +387,7 @@ class PetForm : Form {
         Win.keybd_event(0x7E, 0, 2, UIntPtr.Zero);
         Win.mouse_event(0x0001, 1, 0, 0, UIntPtr.Zero);
         Win.mouse_event(0x0001, -1, 0, 0, UIntPtr.Zero);
+        nudgeAt = (uint)Environment.TickCount; hasNudge = true;   // para no confundirlo con entrada real
     }
 
     static uint IdleMs() {
@@ -273,7 +405,8 @@ class PetForm : Form {
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
             SetTeams(false);
             keepTimer.Dispose();
-            timer.Dispose(); bBody.Dispose(); bBlack.Dispose();
+            timer.Dispose(); bBody.Dispose(); bBlack.Dispose(); bHeart.Dispose(); bZ.Dispose();
+            bubble.Dispose();
         }
         base.Dispose(disposing);
     }
@@ -375,6 +508,7 @@ class PetForm : Form {
                 string k = line.Substring(0, eq).Trim(), v = line.Substring(eq + 1).Trim();
                 if (k == "color") baseColor = Color.FromArgb(255, Color.FromArgb(int.Parse(v, NumberStyles.HexNumber)));
                 else if (k == "arcoiris") rainbow = v == "1";
+                else if (k == "bocadillos") bubblesOn = v != "0";
             }
         } catch { }
     }
@@ -384,7 +518,8 @@ class PetForm : Form {
             Directory.CreateDirectory(DataDir);
             File.WriteAllText(ConfigPath,
                 "color=" + (baseColor.ToArgb() & 0xFFFFFF).ToString("X6") + "\r\n" +
-                "arcoiris=" + (rainbow ? "1" : "0") + "\r\n");
+                "arcoiris=" + (rainbow ? "1" : "0") + "\r\n" +
+                "bocadillos=" + (bubblesOn ? "1" : "0") + "\r\n");
         } catch { }
     }
 
@@ -436,7 +571,17 @@ class PetForm : Form {
     // ---------- Dibujo ----------
     bool Free { get { return dragging || mode == Mode.Air; } }
     float CurAngle() { return Free ? (float)(phi * 180.0 / Math.PI) : ModeAngle(); }
-    int CurHop() { return Free ? 0 : (int)Math.Round(hop); }
+    // Tumbada durmiendo en el suelo (sin patas, el cuerpo apoyado)
+    bool Lying() { return mood == Mood.Dormida && mode == Mode.Floor && !dragging && vy == 0; }
+    int CurHop() { return (Free || Lying()) ? 0 : (int)Math.Round(hop); }
+    int AnimPhase() {
+        switch (mood) {
+            case Mood.Feliz: return (tick / 6) % 8;
+            case Mood.Mareada: return (tick / 3) % 8;
+            case Mood.Dormida: return (tick / 15) % 4;
+        }
+        return 0;
+    }
     string CurLegs() {
         if (Free) return (tick & 2) == 0 ? LegsA : LegsB;   // patalea
         if (!walking || paused) return LegsA;
@@ -446,44 +591,107 @@ class PetForm : Form {
     // Repinta solo si ha cambiado algo visible (moverse la ventana no necesita repintar)
     void InvalidateIfChanged() {
         float angle = CurAngle(); int hp = CurHop(); string legs = CurLegs(); bool eyes = blink <= 0;
-        if (angle != lastAngle || hp != lastHop || !ReferenceEquals(legs, lastLegs) || eyes != lastEyes || PX != lastPX)
+        if (angle != lastAngle || hp != lastHop || !ReferenceEquals(legs, lastLegs) || eyes != lastEyes || PX != lastPX
+            || mood != lastMood || lookX != lastLX || lookY != lastLY || AnimPhase() != lastAnim || Lying() != lastLying)
             Invalidate();
+    }
+
+    void Dot(Graphics g, int offX, int offY, int sx, int sy, Brush b) {
+        g.FillRectangle(b, offX + sx * PX, offY + sy * PX, PX, PX);
+    }
+
+    // Ojos segun el animo. Columnas de los ojos: 4 y 9; filas 2-3 (coordenadas del sprite).
+    void DrawEyes(Graphics g, int offX, int offY, bool open) {
+        int[] cols = { 4, 9 };
+        foreach (int ex in cols) {
+            switch (mood) {
+                case Mood.Dormida:       // cerrados: una rayita
+                    Dot(g, offX, offY, ex - 1, 3, bBlack); Dot(g, offX, offY, ex, 3, bBlack); Dot(g, offX, offY, ex + 1, 3, bBlack);
+                    break;
+                case Mood.Feliz:         // ^ ^
+                    Dot(g, offX, offY, ex, 2, bBlack); Dot(g, offX, offY, ex - 1, 3, bBlack); Dot(g, offX, offY, ex + 1, 3, bBlack);
+                    break;
+                case Mood.Mareada: {     // espiral: anillo con un hueco que gira
+                    int gap = (tick / 3) % 8;
+                    int[] rx = { -1, 0, 1, 1, 1, 0, -1, -1 };
+                    int[] ry = { -1, -1, -1, 0, 1, 1, 1, 0 };
+                    for (int i = 0; i < 8; i++)
+                        if (i != gap) Dot(g, offX, offY, ex + rx[i], 3 + ry[i], bBlack);
+                    break;
+                }
+                case Mood.Aburrida:      // medio cerrados: solo la mitad de abajo
+                    if (open) Dot(g, offX, offY, ex + lookX, 3, bBlack);
+                    break;
+                default:
+                    if (open) { Dot(g, offX, offY, ex + lookX, 2 + lookY, bBlack); Dot(g, offX, offY, ex + lookX, 3 + lookY, bBlack); }
+                    break;
+            }
+        }
+    }
+
+    void DrawGlyph(Graphics g, string[] glyph, int x, int y, int cell, Brush b) {
+        for (int gy2 = 0; gy2 < glyph.Length; gy2++)
+            for (int gx2 = 0; gx2 < glyph[gy2].Length; gx2++)
+                if (glyph[gy2][gx2] == 'X') g.FillRectangle(b, x + gx2 * cell, y + gy2 * cell, cell, cell);
+    }
+
+    // Corazoncitos (feliz) o Zzz (dormida) por encima de la cabeza
+    void DrawDecor(Graphics g, int offX, int offY, bool lying) {
+        if (mood == Mood.Feliz) {
+            int cell = Math.Max(1, PX / 2), p = (tick / 6) % 8;
+            for (int k = 0; k < 2; k++) {
+                int ph = (p + k * 4) % 8;
+                int hx = offX + (k == 0 ? 1 : 8) * PX;
+                int hy = Math.Max(0, offY - cell * 3 - ph * (PX / 2 + 1));
+                DrawGlyph(g, HeartGlyph, hx, hy, cell, bHeart);
+            }
+        } else if (mood == Mood.Dormida && lying) {
+            int n = (tick / 15) % 4;
+            for (int i = 0; i < n; i++) {
+                int cell = Math.Max(1, PX * (i + 2) / 6);
+                int zx = offX + 10 * PX + i * PX;
+                int zy = Math.Max(0, offY - PX / 2 - i * PX - 5 * cell);
+                DrawGlyph(g, ZGlyph, zx, zy, cell, bZ);
+            }
+        }
     }
 
     protected override void OnPaint(PaintEventArgs e) {
         Graphics g = e.Graphics;
         float angle = CurAngle(); int hp = CurHop(); string legs = CurLegs(); bool eyes = blink <= 0;
+        bool lying = Lying();
         lastAngle = angle; lastHop = hp; lastLegs = legs; lastEyes = eyes; lastPX = PX;
+        lastMood = mood; lastLX = lookX; lastLY = lookY; lastAnim = AnimPhase(); lastLying = lying;
 
         if (angle != 0) {
             g.TranslateTransform(SZ / 2f, SZ / 2f); g.RotateTransform(angle); g.TranslateTransform(-SZ / 2f, -SZ / 2f);
         }
-        int offY = M + H - (Body.Length + 2) * PX - hp;
+        int offY = M + H - (Body.Length + 2) * PX - hp + (lying ? 2 * PX : 0);
         int offX = M;
-        int rows = Body.Length + 2;
+        int rows = lying ? Body.Length : Body.Length + 2;   // tumbada: sin patas
         for (int y = 0; y < rows; y++) {
             string row = y < Body.Length ? Body[y] : legs;
             for (int x = 0; x < row.Length; x++) {
-                char c = row[x];
-                if (c == '.') continue;
-                Brush brush = (c == 'E' && eyes) ? bBlack : bBody;
-                g.FillRectangle(brush, offX + x * PX, offY + y * PX, PX, PX);
+                if (row[x] == '.') continue;
+                g.FillRectangle(bBody, offX + x * PX, offY + y * PX, PX, PX);
             }
         }
+        DrawEyes(g, offX, offY, eyes);
+        DrawDecor(g, offX, offY, lying);
     }
 
     // ---------- Raton: agarrar / girar / lanzar / click ----------
     protected override void OnMouseDown(MouseEventArgs e) {
         base.OnMouseDown(e);
         if (e.Button != MouseButtons.Left) return;
-        down = true; moved = false;
+        down = true; moved = false; Touch();
         Point p = Cursor.Position;
         downX = p.X; downY = p.Y;
     }
 
     protected override void OnMouseMove(MouseEventArgs e) {
         base.OnMouseMove(e);
-        if (!down) return;
+        if (!down) { Caress(e.X); return; }
         Point p = Cursor.Position;
         if (!moved && (Math.Abs(p.X - downX) + Math.Abs(p.Y - downY)) > 4) {
             moved = true; dragging = true;
@@ -527,6 +735,7 @@ class PetForm : Form {
 
     protected override void OnMouseWheel(MouseEventArgs e) {
         base.OnMouseWheel(e);
+        Touch();
         SetScale(e.Delta > 0 ? PX + 1 : PX - 1);
     }
 
@@ -541,6 +750,10 @@ class PetForm : Form {
             vx = Math.Max(-MAXV, Math.Min(MAXV, tvx));
             vyA = Math.Max(-MAXV, Math.Min(MAXV, tvy));
             cx = Left + SZ / 2.0; cy = Top + SZ / 2.0;
+            if (Math.Abs(vx) + Math.Abs(vyA) >= 10) {
+                AddShake(2);
+                if (mood != Mood.Mareada && rand.Next(2) == 0) Say(FrasesLanzada);
+            }
             // si la sueltas despacio cerca de una pared o del techo, se queda pegada
             if (Math.Abs(vx) + Math.Abs(vyA) < 10) TryStick(W * 0.6);
         } else {
@@ -658,13 +871,16 @@ class PetForm : Form {
 
         // paredes: rebota solo si al otro lado no hay otra pantalla
         if (cx - half < a.Left && !InScreen(a.Left - 1, R(cy + half - 4))) {
+            if (Math.Abs(vx) > 10) AddShake(1);
             cx = a.Left + half; vx = Math.Abs(vx) * bnc; phiV += vyA * 0.01;
         }
         if (cx + half > a.Right && !InScreen(a.Right + 1, R(cy + half - 4))) {
+            if (Math.Abs(vx) > 10) AddShake(1);
             cx = a.Right - half; vx = -Math.Abs(vx) * bnc; phiV -= vyA * 0.01;
         }
         // techo
         if (cy - half < a.Top) {
+            if (Math.Abs(vyA) > 10) AddShake(1);
             cy = a.Top + half; vyA = Math.Abs(vyA) * bnc;
         }
         // suelo
@@ -675,6 +891,7 @@ class PetForm : Form {
                 mode = Mode.Floor; phi = 0; phiV = 0; vy = 0; hopV = 5.0;
                 if (vx > 0) dir = 1; else if (vx < 0) dir = -1;
             } else {
+                if (Math.Abs(vyA) > 10) AddShake(1);
                 phiV += vx * 0.008;      // al rodar por el suelo gira
                 vyA = -Math.Abs(vyA) * bnc;
                 vx *= fric;
@@ -684,10 +901,162 @@ class PetForm : Form {
         SetCenter(cx, cy);
     }
 
+    // ---------- Animo, bocadillos y sueno ----------
+    void SetMood(Mood m, int ticks) { mood = m; moodTicks = ticks; }
+
+    // Interaccion directa con la mascota (resetea el aburrimiento)
+    void Touch() {
+        lastActMs = Environment.TickCount;
+        if (mood == Mood.Aburrida) SetMood(Mood.Normal, 0);
+    }
+
+    // "Acariciar": mover el raton por encima, sin pulsar, de un lado a otro varias veces
+    void Caress(int mx) {
+        if (mood == Mood.Dormida || mood == Mood.Mareada || dragging) return;
+        int now = Environment.TickCount;
+        if (now - lastMoveMs > 700) { caressN = 0; lastSign = 0; }
+        int dx = mx - lastMX;
+        if (Math.Abs(dx) < 3) return;
+        lastMX = mx; lastMoveMs = now; Touch();
+        int s = dx > 0 ? 1 : -1;
+        if (lastSign != 0 && s != lastSign) caressN++;
+        lastSign = s;
+        if (caressN >= 4) {
+            caressN = 0; lastSign = 0;
+            if (mood != Mood.Feliz) { hopV = 6.0; Say(FrasesCaricia); }
+            SetMood(Mood.Feliz, 230);   // ~7 s
+        }
+    }
+
+    // Lanzamientos y rebotes fuertes en poco tiempo la marean
+    void AddShake(int n) {
+        int now = Environment.TickCount;
+        if (now - shakeStamp > 8000) shakeScore = 0;
+        shakeStamp = now; shakeScore += n;
+        if (shakeScore >= 10 && mood != Mood.Dormida) {
+            shakeScore = 0; chaseTicks = 0;
+            SetMood(Mood.Mareada, 170);   // ~5 s
+            Say(FrasesMareo);
+        }
+    }
+
+    void Say(string[] pool) { SayText(pool[rand.Next(pool.Length)]); }
+
+    void SayText(string t) {
+        if (!bubblesOn || mood == Mood.Dormida) return;
+        bubble.SetText(t);
+        bubbleTicks = 100 + t.Length * 4;
+        UpdateBubble();
+        if (!bubble.Visible) bubble.Show();
+    }
+
+    void HideBubble() {
+        bubbleTicks = 0;
+        if (bubble.Visible) bubble.Hide();
+    }
+
+    void UpdateBubble() {
+        if (bubbleTicks <= 0) return;
+        Rectangle r;
+        if (CurAngle() != 0) r = new Rectangle(Left + M, Top + M, W, H);
+        else {
+            bool ly = Lying();
+            int top = Top + M + H - (Body.Length + 2) * PX - CurHop() + (ly ? 2 * PX : 0);
+            r = new Rectangle(Left + M, top, W, (ly ? Body.Length : Body.Length + 2) * PX);
+        }
+        bubble.Follow(r, NearestArea(r.Left + r.Width / 2, r.Top + r.Height / 2));
+    }
+
+    // Ultima entrada REAL del usuario: ignora la que genera el Nudge de "Teams en verde"
+    void PollInput() {
+        Win.LASTINPUTINFO info = new Win.LASTINPUTINFO();
+        info.cbSize = (uint)Marshal.SizeOf(info);
+        if (!Win.GetLastInputInfo(ref info)) return;
+        uint t = info.dwTime;
+        if (t == lastSeenInput) return;
+        lastSeenInput = t;
+        bool ours = hasNudge && Math.Abs(unchecked((int)(t - nudgeAt))) <= 300;
+        if (!ours) lastRealInput = t;
+    }
+
+    void UpdateSleep() {
+        PollInput();
+        uint idle = (uint)Environment.TickCount - lastRealInput;
+        int h = DateTime.Now.Hour;
+        bool night = h >= 1 && h < 7;
+        if (mood != Mood.Dormida) {
+            if (!dragging && (idle >= SLEEP_MS || (night && idle >= NIGHT_IDLE_MS))) StartSleep();
+        } else if (idle < 3000) Wake();
+    }
+
+    void StartSleep() {
+        SetMood(Mood.Dormida, 0);
+        chaseTicks = 0; walking = false; hopV = 0;
+        HideBubble();
+        if (mode != Mode.Floor && mode != Mode.Air) {   // pared o techo: se deja caer
+            mode = Mode.Floor; vy = 0; stuck = false; stepTop = null;
+        }
+    }
+
+    void Wake() {
+        SetMood(Mood.Normal, 0);
+        lastActMs = Environment.TickCount;
+        hopV = 6.0;
+        Say(FrasesDespertar);
+    }
+
+    // Pupilas: 1 pixel de sprite hacia el cursor (en coordenadas del sprite, deshaciendo la rotacion)
+    void UpdateLook() {
+        if (mood != Mood.Normal && mood != Mood.Aburrida) { lookX = 0; lookY = 0; return; }
+        Point c = Cursor.Position;
+        double dx = c.X - (Left + SZ / 2.0), dy = c.Y - (Top + SZ / 2.0);
+        double a = -CurAngle() * Math.PI / 180.0;
+        double rx = dx * Math.Cos(a) - dy * Math.Sin(a), ry = dx * Math.Sin(a) + dy * Math.Cos(a);
+        double thr = PX * 2;
+        lookX = rx > thr ? 1 : (rx < -thr ? -1 : 0);
+        lookY = ry > thr ? 1 : (ry < -thr ? -1 : 0);
+    }
+
+    // Pixeles por tick al pasear segun el animo
+    int MoodStep() {
+        switch (mood) {
+            case Mood.Feliz: return speed + 1;
+            case Mood.Aburrida: return (tick & 1) == 0 ? speed : 0;      // la mitad de rapido
+            case Mood.Mareada: return tick % 3 == 0 ? speed : 0;
+        }
+        return speed;
+    }
+
+    // Todo lo "mental": se llama una vez por tick
+    void Think() {
+        if (tick % 7 == 0) UpdateSleep();
+        if (tick % 3 == 0) UpdateLook();
+        int now = Environment.TickCount;
+
+        if (moodTicks > 0 && --moodTicks == 0) SetMood(Mood.Normal, 0);
+
+        if (mood == Mood.Normal && tick % 33 == 0 && now - lastActMs > BORED_MS) {
+            SetMood(Mood.Aburrida, 0);
+            nextSigh = 1500 + rand.Next(1500);
+            Say(FrasesAburrida);
+        }
+        if (mood == Mood.Aburrida && --nextSigh <= 0) {
+            nextSigh = 1500 + rand.Next(1500);   // ~50-100 s
+            if (bubbleTicks <= 0) Say(FrasesAburrida);
+        }
+
+        if (--nextChatter <= 0) {
+            nextChatter = 6000 + rand.Next(9840);   // ~3-8 min
+            if (mood != Mood.Dormida && !dragging && mode != Mode.Air && bubbleTicks <= 0) Say(FrasesAzar);
+        }
+        if (bubbleTicks > 0 && --bubbleTicks == 0) HideBubble();
+    }
+
     // ---------- Bucle de animacion ----------
     void OnTick(object sender, EventArgs e) {
         tick++;
         if (tick % 100 == 0) RefreshAreas();   // por si cambia la barra de tareas
+        Think();
 
         // arcoiris: cambia de tono cada 3 ticks (~11 veces/s, una vuelta completa cada ~11 s)
         if (rainbow && tick % 3 == 0) { hue = (hue + 4) % 360; SetBodyColor(FromHue(hue)); }
@@ -702,18 +1071,40 @@ class PetForm : Form {
             if (hop > 10) hop = 10;
         }
 
-        if (dragging) { StepDrag(); InvalidateIfChanged(); return; }
-        if (mode == Mode.Air) { StepAir(); InvalidateIfChanged(); return; }
+        if (dragging) { wobX = 0; StepDrag(); InvalidateIfChanged(); UpdateBubble(); return; }
+        if (mode == Mode.Air) { wobX = 0; StepAir(); InvalidateIfChanged(); UpdateBubble(); return; }
 
-        // posicion de la caja logica (sin margen)
-        int x = Left + M, y = Top + M;
+        // dormida: no se queda pegada a paredes/techo
+        if (mood == Mood.Dormida && mode != Mode.Floor) { mode = Mode.Floor; vy = 0; stuck = false; stepTop = null; }
+
+        // posicion de la caja logica (sin margen); wobX es el tambaleo que se aplico en el tick anterior
+        int x = Left + M - wobX, y = Top + M;
         int ccx = x + W / 2, midY = y + H / 2;
         Rectangle area = NearestArea(ccx, midY);
         int floor = area.Bottom - H;
 
+        // a veces (raro) persigue unos segundos al cursor si esta cerca, en su mismo suelo
+        if (chaseTicks <= 0 && tick % 33 == 0 && mode == Mode.Floor && y >= floor && !paused
+            && (mood == Mood.Normal || mood == Mood.Feliz)) {
+            Point cp = Cursor.Position;
+            int adx = Math.Abs(cp.X - ccx);
+            if (adx > W && adx < W * 8 && cp.X >= area.Left && cp.X < area.Right
+                && cp.Y > area.Bottom - 3 * H && cp.Y <= area.Bottom && rand.Next(90) == 0)
+                chaseTicks = 100 + rand.Next(100);
+        }
+        if (chaseTicks > 0) {
+            if (mode != Mode.Floor || mood == Mood.Dormida || mood == Mood.Mareada || paused) chaseTicks = 0;
+            else {
+                chaseTicks--;
+                int dxc = Cursor.Position.X - ccx;
+                if (Math.Abs(dxc) < W / 2 + 4) { chaseTicks = 0; walking = false; }
+                else { walking = true; dir = dxc > 0 ? 1 : -1; if (speed < 2) speed = 2; }
+            }
+        }
+
         // decisiones aleatorias
-        nextDecision--;
-        if (nextDecision <= 0) {
+        if (chaseTicks <= 0) nextDecision--;
+        if (nextDecision <= 0 && chaseTicks <= 0) {
             int r = rand.Next(10);
             if (mode == Mode.Floor) {
                 if (r < 3) walking = false;
@@ -728,7 +1119,8 @@ class PetForm : Form {
             speed = 1 + rand.Next(3);
             nextDecision = 60 + rand.Next(150);
         }
-        bool moving = walking && !paused;
+        bool moving = walking && !paused && mood != Mood.Dormida;
+        int st = MoodStep();
 
         if (mode == Mode.Floor) {
             stepTop = null; stuck = false;
@@ -741,7 +1133,7 @@ class PetForm : Form {
                 if (y > floor) hopV = 6.0;
                 y = floor;
                 if (moving) {
-                    int newX = x + dir * speed;
+                    int newX = x + dir * st;
                     int lead = dir > 0 ? newX + W - 1 : newX;
                     Rectangle la;
                     if (!TryAreaAt(lead, midY, out la)) {
@@ -765,7 +1157,7 @@ class PetForm : Form {
             int outward;
             if (mode == Mode.WallR) { x = area.Right - W; outward = 1; } else { x = area.Left; outward = -1; }
             if (moving) {
-                y += vdir * speed;
+                y += vdir * st;
                 if (vdir < 0) {
                     if (stepTop.HasValue && y <= stepTop.Value) {
                         // arriba del escalon: pasar a la otra pantalla
@@ -784,7 +1176,7 @@ class PetForm : Form {
             if (!TryAreaAt(ccx, y, out ca)) ca = area;
             y = ca.Top;
             if (moving) {
-                int newX = x + dir * speed;
+                int newX = x + dir * st;
                 int lead = dir > 0 ? newX + W - 1 : newX;
                 Rectangle tmp;
                 if (!TryAreaAt(lead, y, out tmp)) {
@@ -797,8 +1189,11 @@ class PetForm : Form {
             }
         }
 
-        if ((x - M) != Left || (y - M) != Top) Location = new Point(x - M, y - M);
+        // tambaleo de la mareada (solo en el suelo)
+        wobX = (mood == Mood.Mareada && mode == Mode.Floor) ? R(Math.Sin(tick * 0.4) * PX * 0.8) : 0;
+        if ((x - M + wobX) != Left || (y - M) != Top) Location = new Point(x - M + wobX, y - M);
         InvalidateIfChanged();
+        UpdateBubble();
     }
 
     [STAThread]
