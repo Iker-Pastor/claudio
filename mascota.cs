@@ -25,6 +25,12 @@ static class Win {
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
     [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
+    [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+    [DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
 }
 
 enum Mode { Floor, WallL, WallR, Ceiling, Air }
@@ -128,6 +134,14 @@ class PetForm : Form {
 
     readonly Random rand = new Random();
     readonly Timer timer = new Timer();
+
+    // ---------- Teams en verde: mientras la mascota esta abierta ----------
+    // Solo "toca" el sistema si llevas IDLE_MS sin actividad real.
+    const int IDLE_MS = 60000, KEEP_MS = 30000;
+    const uint ES_CONTINUOUS = 0x80000000, ES_SYSTEM_REQUIRED = 0x1, ES_DISPLAY_REQUIRED = 0x2;
+    readonly Timer keepTimer = new Timer();
+    ToolStripMenuItem miTeams;
+    bool teamsOn;
     SolidBrush bBody = new SolidBrush(Orange);
     readonly SolidBrush bBlack = new SolidBrush(Black);
     readonly ToolStripMenuItem miStay;
@@ -195,8 +209,13 @@ class PetForm : Form {
             miStay.Text = paused ? "Pasear" : "Quieta";
         };
         menu.Items.Add(miStay);
+        miTeams = new ToolStripMenuItem("Teams en verde");
+        miTeams.CheckOnClick = true;
+        miTeams.Checked = true;
+        miTeams.CheckedChanged += delegate { SetTeams(miTeams.Checked); };
+        menu.Items.Add(miTeams);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Salir", null, delegate { timer.Stop(); Close(); });
+        menu.Items.Add("Salir", null, delegate { timer.Stop(); SetTeams(false); Close(); });
         ContextMenuStrip = menu;
 
         LoadConfig();
@@ -210,7 +229,40 @@ class PetForm : Form {
         timer.Interval = 30;
         timer.Tick += OnTick;
         Load += delegate { MinimumSize = new Size(SZ, SZ); Size = new Size(SZ, SZ); };
-        Shown += delegate { Size = new Size(SZ, SZ); timer.Start(); };
+        Shown += delegate { Size = new Size(SZ, SZ); timer.Start(); SetTeams(miTeams.Checked); };
+
+        keepTimer.Interval = KEEP_MS;
+        keepTimer.Tick += delegate { Nudge(); };
+    }
+
+    void SetTeams(bool on) {
+        if (on == teamsOn) return;
+        teamsOn = on;
+        if (on) {
+            // Impide que la pantalla se apague/bloquee y que el equipo se suspenda
+            Win.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+            keepTimer.Start();
+            Nudge();
+        } else {
+            Win.SetThreadExecutionState(ES_CONTINUOUS);
+            keepTimer.Stop();
+        }
+    }
+
+    void Nudge() {
+        if (!teamsOn || IdleMs() < IDLE_MS) return;
+        // F15 no existe en teclados normales: ninguna app reacciona, pero cuenta como actividad
+        Win.keybd_event(0x7E, 0, 0, UIntPtr.Zero);
+        Win.keybd_event(0x7E, 0, 2, UIntPtr.Zero);
+        Win.mouse_event(0x0001, 1, 0, 0, UIntPtr.Zero);
+        Win.mouse_event(0x0001, -1, 0, 0, UIntPtr.Zero);
+    }
+
+    static uint IdleMs() {
+        Win.LASTINPUTINFO info = new Win.LASTINPUTINFO();
+        info.cbSize = (uint)Marshal.SizeOf(info);
+        if (!Win.GetLastInputInfo(ref info)) return 0;
+        return (uint)Environment.TickCount - info.dwTime;
     }
 
     void OnDisplayChanged(object s, EventArgs e) { RefreshAreas(); }
@@ -219,6 +271,8 @@ class PetForm : Form {
         if (disposing) {
             SystemEvents.DisplaySettingsChanged -= OnDisplayChanged;
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+            SetTeams(false);
+            keepTimer.Dispose();
             timer.Dispose(); bBody.Dispose(); bBlack.Dispose();
         }
         base.Dispose(disposing);
