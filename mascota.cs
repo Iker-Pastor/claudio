@@ -458,7 +458,9 @@ class PetForm : Form {
     double hue = 0;               // tono actual del arcoiris (0..360)
     static readonly string DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MascotaClaude");
     static readonly string ConfigPath = Path.Combine(DataDir, "config.txt");
-    static readonly string RemPath = Path.Combine(DataDir, "recordatorios.txt");
+    // recordatorios.txt va en la carpeta de la mascota (junto a mascota.vbs y mascota.exe)
+    static readonly string RemPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "recordatorios.txt");
+    static readonly string OldRemPath = Path.Combine(DataDir, "recordatorios.txt");   // ubicacion de la version anterior
 
     // ---------- Animo, bocadillos, sueno y mirada ----------
     // Frases de los bocadillos: edita estas listas a tu gusto.
@@ -505,6 +507,7 @@ class PetForm : Form {
     int pomoEnd;
     List<Reminder> rems = new List<Reminder>();       // recordatorios de recordatorios.txt
     DateTime remStamp = DateTime.MinValue;            // fecha de modificacion del archivo ya cargado
+    string remCreateErr;                              // error al crear el archivo al arrancar (se muestra al poder)
     bool remLoaded;                                   // ya se cargo una vez (las siguientes recargas se anuncian)
     bool oldWater, oldStretch, oldGym;                // opciones de versiones anteriores (para crear el archivo)
     bool bubbleImportant;
@@ -646,11 +649,11 @@ class PetForm : Form {
         miRem.DropDownItems.Add(miPomo);
         miRem.DropDownItems.Add(new ToolStripSeparator());
         miRem.DropDownItems.Add("Editar recordatorios.txt...", null, delegate {
-            EnsureRemFile();
+            if (!EnsureRemFile()) return;
             try { Process.Start("notepad.exe", "\"" + RemPath + "\""); } catch { }
         });
         miRem.DropDownItems.Add("Abrir carpeta", null, delegate {
-            EnsureRemFile();
+            if (!EnsureRemFile()) return;
             try { Process.Start("explorer.exe", "/select,\"" + RemPath + "\""); } catch { }
         });
         menu.Items.Add(miRem);
@@ -1578,10 +1581,11 @@ class PetForm : Form {
         "# (El Pomodoro sigue en el menú Recordatorios.)\r\n" +
         "\r\n";
 
-    void EnsureRemFile() {
+    // Crea recordatorios.txt si no existe. Si no puede, lo dice en un bocadillo y devuelve false.
+    bool EnsureRemFile() {
         try {
-            if (File.Exists(RemPath)) return;
-            Directory.CreateDirectory(DataDir);
+            if (File.Exists(RemPath)) return true;
+            if (File.Exists(OldRemPath)) { File.Copy(OldRemPath, RemPath); return true; }   // trae el de la version anterior
             string c = RemHelp +
                 "L-V 15:00 | ¡Hora de salir! | feliz\r\n" +
                 (oldGym ? "" : "#") + "L-V 15:30 | ¡Hora de ir al gimnasio! | feliz\r\n" +
@@ -1594,7 +1598,12 @@ class PetForm : Form {
                 "#V 17:00 | ¡Viernes! Apunta lo pendiente para el lunes.\r\n" +
                 "#24/12 18:00 | ¡Feliz Nochebuena! | feliz\r\n";
             File.WriteAllText(RemPath, c, new System.Text.UTF8Encoding(true));   // con BOM: el Bloc de notas respeta las tildes
-        } catch { }
+            return true;
+        } catch (Exception e) {
+            remCreateErr = "No he podido crear " + RemPath + ": " + e.Message;
+            if (Visible) Alert(remCreateErr, Mood.Mareada, 120);
+            return false;
+        }
     }
 
     // Lee el texto en UTF-8; si no lo es (guardado como ANSI), con la codificacion del sistema
@@ -1612,7 +1621,12 @@ class PetForm : Form {
         DateTime stamp;
         string[] lines;
         try {
-            if (!File.Exists(RemPath)) { if (rems.Count > 0) rems = new List<Reminder>(); remStamp = DateTime.MinValue; return; }
+            if (!File.Exists(RemPath)) {
+                if (rems.Count > 0) rems = new List<Reminder>();
+                remStamp = DateTime.MinValue;
+                if (remCreateErr != null) { Alert(remCreateErr, Mood.Mareada, 120); remCreateErr = null; }   // fallo al arrancar
+                return;
+            }
             stamp = File.GetLastWriteTimeUtc(RemPath);
             if (stamp == remStamp) return;
             lines = ReadLinesAnyEncoding(RemPath);
