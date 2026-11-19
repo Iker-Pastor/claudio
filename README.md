@@ -10,7 +10,8 @@ Una mascota virtual de escritorio para Windows, hecha en C# + Windows Forms. Es 
 - **Física**: cógela con el ratón y cuelga del punto donde la agarres, balanceándose y girando. Suéltala en movimiento para lanzarla: vuela, gira y rebota (las pequeñas rebotan más, las grandes son más pesadas).
 - **Click**: da un saltito y trae la app de Claude al frente (la abre si no está abierta).
 - **Rueda del ratón** encima de ella: la hace crecer o encoger.
-- **Click derecho**: menú con *Abrir Claude*, *Color*, *Quieta / Pasear*, *Teams en verde*, *Bocadillos* y *Salir*.
+- **Click derecho**: menú con *Abrir Claude*, *Color*, *Aspecto*, *Quieta / Pasear*, *Teams en verde*, *Bocadillos* y *Salir*.
+- **Aspecto**: click derecho → *Aspecto* para cambiar entre Claudio y **Clawitzer** (sprite 2D estilo Gen 5, incrustado en el exe; se voltea según hacia dónde camina). Con Clawitzer, el menú *Color* ofrece *Normal* (azul) o *Shiny* (rojo) en vez de la paleta. La elección se guarda. Con Clawitzer no se dibujan los ojos, la boca, los accesorios ni la animación de programar de Claudio (los bocadillos, el ánimo, el sueño y las partículas siguen funcionando).
 - **Color**: click derecho → *Color* para elegir uno predefinido (naranja Claude, rojo, azul, verde, morado, rosa, amarillo, blanco) o uno personalizado, o el modo *Arcoíris*, en el que va cambiando de color sin parar. La elección se guarda.
 
 - **Estados de ánimo**: *feliz* (si la acaricias moviendo el ratón por encima sin pulsar: ojos ^^ y corazoncitos y anda más rápido), *aburrida* (sin interacción ~10 min: anda más lenta, ojos entornados y suspira), *mareada* (si la lanzas o rebota mucho en poco tiempo: ojos en espiral y se tambalea unos segundos) y *dormida*.
@@ -60,6 +61,7 @@ Haz doble clic en `mascota.vbs`. La primera vez (y cada vez que modifiques `masc
 | Archivo | Descripción |
 |---|---|
 | `mascota.cs` | Código principal (sprite, física, animación, menú) |
+| `clawitzer.png` / `clawitzer-shiny.png` | Sprites de Clawitzer normal y shiny (de [PokeAPI/sprites](https://github.com/PokeAPI/sprites), Gen 5); se incrustan en el exe al compilar |
 | `mascota.vbs` | Lanzador: compila `mascota.exe` si hace falta y lo arranca |
 | `recordatorios.txt` | Tus recordatorios (lo crea la mascota al arrancar; no se sube al repositorio) |
 | `activar-inicio.bat` / `desactivar-inicio.bat` | Gestión del arranque automático |
