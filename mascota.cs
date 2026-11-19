@@ -272,7 +272,7 @@ class PetForm : Form {
 
     int PX = 6;      // tamano de cada "pixel" en pantalla
     int W, H;        // caja logica de la mascota (cuadrada)
-    int M = 20;      // margen para que quepa al girar
+    int M = 31;      // margen para que quepa al girar y el portatil de "programar" a un lado (la parte transparente no capta clicks)
     int SZ;          // tamano real de la ventana
 
     static readonly Color Orange = Color.FromArgb(217, 119, 87);
@@ -392,11 +392,10 @@ class PetForm : Form {
     readonly SolidBrush bWhite = new SolidBrush(Color.FromArgb(245, 245, 245));
     readonly SolidBrush bPurple = new SolidBrush(Color.FromArgb(75, 45, 115));
     readonly SolidBrush bGold = new SolidBrush(Color.FromArgb(245, 200, 60));
-    // portatil de la animacion "programar"
-    readonly SolidBrush bBezel = new SolidBrush(Color.FromArgb(62, 64, 72));
-    readonly SolidBrush bScreen = new SolidBrush(Color.FromArgb(24, 32, 52));
-    readonly SolidBrush bDeck = new SolidBrush(Color.FromArgb(125, 128, 138));
-    readonly SolidBrush bKey = new SolidBrush(Color.FromArgb(80, 82, 92));
+    // portatil (de perfil, gris claro) de la animacion "programar"; codeSide = lado hacia el que mira (1 der., -1 izq.)
+    readonly SolidBrush bLapBase = new SolidBrush(Color.FromArgb(196, 198, 205));
+    readonly SolidBrush bLapScr = new SolidBrush(Color.FromArgb(232, 233, 240));
+    int codeSide = 1;
     readonly SolidBrush[] bCode = {
         new SolidBrush(Color.FromArgb(140, 235, 170)), new SolidBrush(Color.FromArgb(120, 195, 255)),
         new SolidBrush(Color.FromArgb(255, 175, 205)), new SolidBrush(Color.FromArgb(255, 230, 120)) };
@@ -605,7 +604,7 @@ class PetForm : Form {
             bubble.Dispose();
             if (fx != null) fx.Dispose();
             bRed.Dispose(); bWhite.Dispose(); bPurple.Dispose(); bGold.Dispose(); bPink.Dispose(); bBlue.Dispose();
-            bBezel.Dispose(); bScreen.Dispose(); bDeck.Dispose(); bKey.Dispose();
+            bLapBase.Dispose(); bLapScr.Dispose();
             foreach (SolidBrush cb in bCode) cb.Dispose();
         }
         base.Dispose(disposing);
@@ -807,6 +806,10 @@ class PetForm : Form {
         if (Free) return 0;
         double s = 0.2 * sqT / 6.0;
         if (hopV > 1 && hop > 0) s -= 0.10;
+        if (anim == Anim.Code && animLen > 0) {   // se agacha hacia el portatil mientras teclea
+            int u = Math.Min(animT, animLen - animT);
+            s += 0.22 * Math.Min(1.0, Math.Max(0.0, (u - 14) / 14.0));
+        }
         s += mood == Mood.Dormida ? 0.03 * Math.Sin(tick * 0.045) : 0.022 * Math.Sin(tick * 0.07);
         return Math.Max(-0.2, Math.Min(0.25, s));
     }
@@ -864,6 +867,35 @@ class PetForm : Form {
         Block(g, b, offX, offY, x0, y, x1 - x0 + 1, 1);
     }
 
+    // Celda (k, r) del portatil: k = columnas hacia fuera desde el costado del cuerpo, r = filas sobre el suelo (pixeles de pantalla, sin escalar)
+    void LCell(Graphics g, Brush b, int ex, int k, int r) {
+        int x = codeSide > 0 ? ex + k * PX : ex - (k + 1) * PX;
+        g.FillRectangle(b, x, (int)Math.Round(anY) - (r + 1) * PX, PX, PX);
+    }
+
+    // Programar: busca en el costado, saca un portatil cerrado, lo abre (3 pasos), teclea agachada; al terminar lo cierra y lo guarda.
+    // u = ticks hasta el extremo mas cercano de la animacion, asi el final es la secuencia inversa del principio.
+    void DrawLaptop(Graphics g) {
+        int u = Math.Min(animT, animLen - animT);
+        int gap = Math.Max(1, PX / 3);
+        int ex = (int)Math.Round(anX + codeSide * 7 * PX * scX) + codeSide * gap;
+        if (u < 12) {   // palpando el costado, buscando el portatil
+            LCell(g, bBody, ex, 0, (animT / 3) % 2 == 0 ? 4 : 3);
+            return;
+        }
+        int stage = u < 18 ? 0 : (u < 22 ? 1 : (u < 26 ? 2 : 3));   // 0 cerrado, 1-2 abriendo, 3 abierto
+        for (int k = 0; k <= 3; k++) LCell(g, bLapBase, ex, k, 0);   // base fina
+        if (stage >= 1) LCell(g, bLapScr, ex, 3, 1);                  // pantalla inclinada hacia atras
+        if (stage >= 2) LCell(g, bLapScr, ex, 4, 2);
+        if (stage >= 3) {
+            LCell(g, bLapScr, ex, 4, 3);
+            LCell(g, bCode[(animT / 4) % 4], ex, 3, 2);               // brillo de la pantalla
+            LCell(g, bCode[(animT / 4 + 1) % 4], ex, 3, 3);
+            LCell(g, bBody, ex, 0, 1);                                // bracito sobre la base...
+            LCell(g, bBody, ex, (animT / 3) % 2 == 0 ? 1 : 2, 1);     // ...con la manita tecleando
+        }
+    }
+
     // Programar (portatil), bostezar (boca) y saludar (bracito a la derecha)
     void DrawAnim(Graphics g, int offX, int offY) {
         if (anim == Anim.None || (mood != Mood.Normal && mood != Mood.Aburrida)) return;
@@ -873,21 +905,8 @@ class PetForm : Form {
                 if ((animT / 4) % 2 == 0) { Dot(g, offX, offY, 13, 1, bBody); Dot(g, offX, offY, 13, 0, bBody); }
                 else { Dot(g, offX, offY, 15, 1, bBody); Dot(g, offX, offY, 15, 0, bBody); }
                 break;
-            case Anim.Code:   // portatil delante (tapa las patas): pantalla con codigo que cambia y manitas tecleando
-                Row(g, offX, offY, 2, 11, 5, bBezel);
-                for (int y = 6; y <= 7; y++) {
-                    Dot(g, offX, offY, 2, y, bBezel); Dot(g, offX, offY, 11, y, bBezel);
-                    for (int x = 3; x <= 10; x++) {
-                        int sx = x + animT / 5;
-                        int v = (sx * 5 + y * 11 + (y + 3) * (sx >> 1)) % 9;
-                        Dot(g, offX, offY, x, y, v < 3 ? bScreen : bCode[(v - 3) % 4]);
-                    }
-                }
-                Row(g, offX, offY, 1, 12, 8, bDeck);
-                for (int x = 2; x <= 11; x += 2) Dot(g, offX, offY, x, 8, bKey);
-                bool leftDown = ((animT / 3) & 1) == 0, rightDown = (((animT / 3) + (animT / 9)) & 1) == 1;
-                if (leftDown) Row(g, offX, offY, 3, 4, 8, bBody);
-                if (rightDown) Row(g, offX, offY, 9, 10, 8, bBody);
+            case Anim.Code:
+                DrawLaptop(g);   // (en pixeles de pantalla; usa el ancla y la escala del sprite)
                 break;
             case Anim.Yawn:
                 if (YawnStage() == 0) Row(g, offX, offY, 6, 7, 5, bBlack);
@@ -939,8 +958,8 @@ class PetForm : Form {
                 Row(g, offX, offY, 6, 7, -4, bGold);
                 break;
             case Acc.Gafas:
-                Row(g, offX, offY, 2, 5, 2, bBlack); Row(g, offX, offY, 2, 5, 3, bBlack);
-                Row(g, offX, offY, 8, 11, 2, bBlack); Row(g, offX, offY, 8, 11, 3, bBlack);
+                Row(g, offX, offY, 2, 5, 2, bBlack); Row(g, offX, offY, 2, 5, 3, bBlack); Row(g, offX, offY, 2, 5, 4, bBlack);
+                Row(g, offX, offY, 8, 11, 2, bBlack); Row(g, offX, offY, 8, 11, 3, bBlack); Row(g, offX, offY, 8, 11, 4, bBlack);
                 Row(g, offX, offY, 6, 7, 2, bBlack);
                 Dot(g, offX, offY, 2, 2, bWhite); Dot(g, offX, offY, 8, 2, bWhite);   // brillo
                 break;
@@ -965,35 +984,35 @@ class PetForm : Form {
         bool surp = Surprised();
         foreach (int ex in cols) {
             if (surp) {              // sorpresa: ojos altos (2x3) con brillo
-                Block(g, bBlack, offX, offY, ex + lookX, 1 + lookY, 2, 3);
+                Block(g, bBlack, offX, offY, ex + lookX, 1 + lookY, 2, 4);
                 Dot(g, offX, offY, ex + lookX, 1 + lookY, bWhite);
                 continue;
             }
             switch (em) {
                 case Mood.Dormida:       // cerrados: rayita de 4
-                    Row(g, offX, offY, ex - 1, ex + 2, 3, bBlack);
+                    Row(g, offX, offY, ex - 1, ex + 2, 4, bBlack);
                     break;
                 case Mood.Feliz:         // ^ ^
-                    Row(g, offX, offY, ex, ex + 1, 2, bBlack); Dot(g, offX, offY, ex - 1, 3, bBlack); Dot(g, offX, offY, ex + 2, 3, bBlack);
+                    Row(g, offX, offY, ex, ex + 1, 3, bBlack); Dot(g, offX, offY, ex - 1, 4, bBlack); Dot(g, offX, offY, ex + 2, 4, bBlack);
                     break;
                 case Mood.Mareada: {     // espiral: anillo con un hueco que gira
                     int gap = (tick / 3) % 8;
                     int[] rx = { -1, 0, 1, 1, 1, 0, -1, -1 };
                     int[] ry = { -1, -1, -1, 0, 1, 1, 1, 0 };
                     for (int i = 0; i < 8; i++)
-                        if (i != gap) Dot(g, offX, offY, ex + 1 + rx[i], 3 + ry[i], bBlack);
+                        if (i != gap) Dot(g, offX, offY, ex + 1 + rx[i], 4 + ry[i], bBlack);
                     break;
                 }
                 case Mood.Aburrida:      // entornados: solo la fila de abajo
-                    if (bl == 2) Row(g, offX, offY, ex - 1, ex + 2, 3, bBlack);
-                    else Row(g, offX, offY, ex + lookX, ex + lookX + 1, 3, bBlack);
+                    if (bl == 2) Row(g, offX, offY, ex - 1, ex + 2, 4, bBlack);
+                    else Row(g, offX, offY, ex + lookX, ex + lookX + 1, 4, bBlack);
                     break;
                 default:
                     if (bl == 0) {
-                        Block(g, bBlack, offX, offY, ex + lookX, 2 + lookY, 2, 2);
+                        Block(g, bBlack, offX, offY, ex + lookX, 2 + lookY, 2, 3);
                         Dot(g, offX, offY, ex + lookX, 2 + lookY, bWhite);   // brillo
-                    } else if (bl == 1) Row(g, offX, offY, ex + lookX, ex + lookX + 1, 3, bBlack);
-                    else Row(g, offX, offY, ex - 1, ex + 2, 3, bBlack);
+                    } else if (bl == 1) Row(g, offX, offY, ex + lookX, ex + lookX + 1, 4, bBlack);
+                    else Row(g, offX, offY, ex - 1, ex + 2, 4, bBlack);
                     break;
             }
         }
@@ -1097,7 +1116,7 @@ class PetForm : Form {
         PX = newPX;
         W = Body[0].Length * newPX;
         H = W;
-        M = (int)Math.Ceiling(W * 0.21) + 2;
+        M = (int)Math.Ceiling(W * 0.34) + 2;
         SZ = W + 2 * M;
         gx *= ratio; gy *= ratio;          // el punto de agarre escala con ella
         Size newSize = new Size(SZ, SZ);
@@ -1590,7 +1609,9 @@ class PetForm : Form {
     void StartAnim(Anim a, int len) {
         if (mode != Mode.Floor || dragging || mood == Mood.Dormida || mood == Mood.Mareada || vy != 0) return;
         anim = a; animT = 0; animLen = len;
+        if (a == Anim.Code) { codeSide = dir >= 0 ? 1 : -1; lookX = codeSide; lookY = 1; }
     }
+
 
 
 
@@ -1659,7 +1680,7 @@ class PetForm : Form {
     // Pupilas: 1 pixel de sprite hacia el cursor (en coordenadas del sprite, deshaciendo la rotacion)
     void UpdateLook() {
         if (mood != Mood.Normal && mood != Mood.Aburrida) { lookX = 0; lookY = 0; return; }
-        if (anim == Anim.Code) { lookX = 0; lookY = 1; return; }   // mira a la pantalla
+        if (anim == Anim.Code) { lookX = codeSide; lookY = 1; return; }   // mira al portatil
         Point c = Cursor.Position;
         double dx = c.X - (Left + SZ / 2.0), dy = c.Y - (Top + SZ / 2.0);
         double a = -CurAngle() * Math.PI / 180.0;
