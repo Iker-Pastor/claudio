@@ -462,14 +462,17 @@ class PetForm : Form {
 
     // ---------- Aspecto: Claudio (por defecto) o cualquier Pokemon (sprite 2D Gen 5 de PokeAPI/sprites) ----------
     const int COLS = 14;                  // ancho logico de la mascota, en "pixeles"
-    string skin = "claudio";              // "claudio" | "pokemon"
+    string skin = "claudio";              // "claudio" | "og" (Claudio original, ojos de pixel) | "pokemon"
     int pokeId = 693; string pokeName = "Clawitzer";
     bool useSprite;                       // true = se dibuja el sprite en vez de Claudio
     bool shiny = true;                    // variante: shiny o normal
     Bitmap petImg;                        // sprite original, recortado al contenido
     Bitmap spr, sprFlip; int sprPX = -1;  // sprite ya escalado al tamano actual (normal y volteado)
     bool lastFlip;
-    readonly ToolStripMenuItem miSkin, miSkinClaudio, miSkinClaw, miSkinPick, miNormal, miShiny, miShow;
+    readonly ToolStripMenuItem miSkin, miSkinClaudio, miSkinOg, miSkinPick, miNormal, miShiny, miShow;
+    // Pokemon usados recientemente (id + nombre), el mas reciente primero; se guardan en config.txt
+    readonly List<KeyValuePair<int, string>> recents = new List<KeyValuePair<int, string>>();
+    const int MAX_RECENTS = 10;
     NotifyIcon tray;                      // icono junto al reloj: menu rapido y mostrar/ocultar
     bool petHidden;
     static readonly string SpriteDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MascotaClaude", "sprites");
@@ -621,14 +624,14 @@ class PetForm : Form {
         miSkin = new ToolStripMenuItem("Aspecto");
         miSkinClaudio = new ToolStripMenuItem("Claudio");
         miSkinClaudio.Click += delegate { SetSkin("claudio"); };
-        miSkinClaw = new ToolStripMenuItem(pokeName);   // el Pokemon actual; el texto se actualiza en ApplySkin
-        miSkinClaw.Click += delegate { SetSkin("pokemon"); };
+        miSkinOg = new ToolStripMenuItem("Claudio OG");
+        miSkinOg.Click += delegate { SetSkin("og"); };
         miSkinPick = new ToolStripMenuItem("Elegir Pokémon...");
         miSkinPick.Click += delegate { PickPokemon(); };
         miSkin.DropDownItems.Add(miSkinClaudio);
-        miSkin.DropDownItems.Add(miSkinClaw);
+        miSkin.DropDownItems.Add(miSkinOg);
         miSkin.DropDownItems.Add(new ToolStripSeparator());
-        miSkin.DropDownItems.Add(miSkinPick);
+        miSkin.DropDownItems.Add(miSkinPick);   // los recientes se insertan entre Claudio y el separador (RebuildSkinMenu)
         menu.Items.Add(miSkin);
 
         miStay = new ToolStripMenuItem("Quieta");
@@ -892,9 +895,19 @@ class PetForm : Form {
                 string k = line.Substring(0, eq).Trim(), v = line.Substring(eq + 1).Trim();
                 if (k == "color") baseColor = Color.FromArgb(255, Color.FromArgb(int.Parse(v, NumberStyles.HexNumber)));
                 else if (k == "arcoiris") rainbow = v == "1";
-                else if (k == "aspecto") skin = v == "claudio" ? "claudio" : "pokemon";   // "clawitzer" = valor antiguo
+                else if (k == "aspecto") skin = v == "claudio" || v == "og" ? v : "pokemon";   // "clawitzer" = valor antiguo
                 else if (k == "pokemon") { int pid; if (int.TryParse(v, out pid) && pid > 0) pokeId = pid; }
                 else if (k == "nombre" && v.Length > 0) pokeName = v;
+                else if (k == "recientes") {
+                    recents.Clear();
+                    foreach (string part in v.Split(',')) {
+                        int c = part.IndexOf(':'); int rid;
+                        if (c <= 0 || !int.TryParse(part.Substring(0, c), out rid) || rid <= 0) continue;
+                        string rn = part.Substring(c + 1).Trim();
+                        if (rn.Length > 0 && recents.Count < MAX_RECENTS && !recents.Exists(r => r.Key == rid))
+                            recents.Add(new KeyValuePair<int, string>(rid, rn));
+                    }
+                }
                 else if (k == "variante") shiny = v != "normal";
                 else if (k == "bocadillos") bubblesOn = v != "0";
                 else if (k == "ventanas") winsOn = v != "0";
@@ -915,6 +928,7 @@ class PetForm : Form {
                 "aspecto=" + skin + "\r\n" +
                 "pokemon=" + pokeId + "\r\n" +
                 "nombre=" + pokeName + "\r\n" +
+                "recientes=" + string.Join(",", recents.ConvertAll(r => r.Key + ":" + r.Value).ToArray()) + "\r\n" +
                 "variante=" + (shiny ? "shiny" : "normal") + "\r\n" +
                 "bocadillos=" + (bubblesOn ? "1" : "0") + "\r\n" +
                 "ventanas=" + (winsOn ? "1" : "0") + "\r\n" +
@@ -933,10 +947,12 @@ class PetForm : Form {
             if (img != null) { if (petImg != null) petImg.Dispose(); petImg = img; sprPX = -1; }
         }
         useSprite = skin == "pokemon" && petImg != null;
-        if (!useSprite) skin = "claudio";
-        miSkinClaudio.Checked = !useSprite;
-        miSkinClaw.Text = pokeName;
-        miSkinClaw.Checked = useSprite;
+        if (!useSprite && skin == "pokemon") skin = "claudio";
+        if (useSprite || recents.Count == 0) AddRecent(pokeId, pokeName);   // Clawitzer de serie si aun no hay ninguno
+        RebuildSkinMenu();
+        // Las animaciones y accesorios son solo del Claudio actual: con un Pokemon o el OG se ocultan del menu
+        miDo.Visible = skin == "claudio";
+        miAcc.Visible = skin == "claudio";
         UpdateTrayIcon();
         // "Color": paleta para Claudio, Normal/Shiny para Clawitzer
         foreach (ToolStripItem it in miColor.DropDownItems)
@@ -944,6 +960,27 @@ class PetForm : Form {
         miNormal.Checked = !shiny; miShiny.Checked = shiny;
         BuildSprites();
         Invalidate();
+    }
+
+    void AddRecent(int id, string name) {
+        recents.RemoveAll(r => r.Key == id);
+        recents.Insert(0, new KeyValuePair<int, string>(id, name));
+        if (recents.Count > MAX_RECENTS) recents.RemoveRange(MAX_RECENTS, recents.Count - MAX_RECENTS);
+    }
+
+    // Menu "Aspecto": Claudio, Claudio OG, Pokemon recientes, separador, "Elegir Pokemon..."
+    void RebuildSkinMenu() {
+        ToolStripItemCollection items = miSkin.DropDownItems;
+        while (items.Count > 2 && !(items[2] is ToolStripSeparator)) items.RemoveAt(2);
+        miSkinClaudio.Checked = skin == "claudio";
+        miSkinOg.Checked = skin == "og";
+        for (int i = 0; i < recents.Count; i++) {
+            int id = recents[i].Key; string name = recents[i].Value;
+            ToolStripMenuItem mi = new ToolStripMenuItem(name);
+            mi.Checked = useSprite && id == pokeId;
+            mi.Click += delegate { SetPokemon(id, name, shiny); };
+            items.Insert(2 + i, mi);
+        }
     }
 
     // ---------- Pokemon: sprites de PokeAPI/sprites (Gen 5, 2D), con cache en %LOCALAPPDATA%\MascotaClaude\sprites ----------
@@ -1526,6 +1563,15 @@ class PetForm : Form {
                 if (row[x] == '.') continue;
                 Block(g, bBody, offX, offY, x, y, 1, 1);
             }
+        }
+        if (skin == "og") {
+            // Claudio original: los ojos son los pixeles 'E' del cuerpo, en negro salvo al parpadear
+            if (eyes == 0)
+                for (int y = 0; y < Body.Length; y++)
+                    for (int x = 0; x < Body[y].Length; x++)
+                        if (Body[y][x] == 'E') Block(g, bBlack, offX, offY, x, y, 1, 1);
+            DrawDecor(g, offX, offY, lying);
+            return;
         }
         DrawEyes(g, offX, offY, eyes);
         DrawMouth(g, offX, offY);
