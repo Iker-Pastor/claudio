@@ -948,7 +948,7 @@ class PetForm : Form {
         }
         useSprite = skin == "pokemon" && petImg != null;
         if (!useSprite && skin == "pokemon") skin = "claudio";
-        if (useSprite || recents.Count == 0) AddRecent(pokeId, pokeName);   // Clawitzer de serie si aun no hay ninguno
+        if (useSprite || recents.Count == 0) AddRecent(pokeId, pokeName);   // Pokemon por defecto si aun no hay ninguno
         RebuildSkinMenu();
         // Las animaciones y accesorios son solo del Claudio actual: con un Pokemon o el OG se ocultan del menu
         miDo.Visible = skin == "claudio";
@@ -1014,23 +1014,14 @@ class PetForm : Form {
         }
     }
 
-    static byte[] ReadResource(string name) {
-        using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream(name)) {
-            if (s == null) return null;
-            using (MemoryStream ms = new MemoryStream()) { s.CopyTo(ms); return ms.ToArray(); }
-        }
-    }
-
-    // Sprite del Pokemon (cache -> incrustado -> descarga). null + err si no se pudo.
+    // Sprite del Pokemon (cache -> descarga). null + err si no se pudo.
     static Bitmap GetPokeSprite(int id, bool shiny, out string err) {
         err = null;
         try {
             string dir = Path.Combine(SpriteDir, shiny ? "shiny" : "normal");
             string f = Path.Combine(dir, id + ".png");
             if (!File.Exists(f)) {
-                byte[] data = null;
-                if (id == 693) data = ReadResource(shiny ? "clawitzer-shiny.png" : "clawitzer.png");   // Clawitzer viene de serie
-                if (data == null) data = Download(SpriteUrl + (shiny ? "shiny/" : "") + id + ".png", 6000);
+                byte[] data = Download(SpriteUrl + (shiny ? "shiny/" : "") + id + ".png", 6000);
                 Directory.CreateDirectory(dir);
                 File.WriteAllBytes(f, data);
             }
