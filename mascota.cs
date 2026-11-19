@@ -472,7 +472,7 @@ class PetForm : Form {
     readonly ToolStripMenuItem miSkin, miSkinClaudio, miSkinOg, miSkinPick, miNormal, miShiny, miShow;
     // Pokemon usados recientemente (id + nombre), el mas reciente primero; se guardan en config.txt
     readonly List<KeyValuePair<int, string>> recents = new List<KeyValuePair<int, string>>();
-    const int MAX_RECENTS = 10;
+    const int MAX_RECENTS = 3;
     NotifyIcon tray;                      // icono junto al reloj: menu rapido y mostrar/ocultar
     bool petHidden;
     static readonly string SpriteDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MascotaClaude", "sprites");
@@ -966,6 +966,23 @@ class PetForm : Form {
         recents.RemoveAll(r => r.Key == id);
         recents.Insert(0, new KeyValuePair<int, string>(id, name));
         if (recents.Count > MAX_RECENTS) recents.RemoveRange(MAX_RECENTS, recents.Count - MAX_RECENTS);
+        PruneSprites();
+    }
+
+    // La cache de sprites (%LOCALAPPDATA%\MascotaClaude\sprites) solo guarda los Pokemon recientes:
+    // los demas se borran (si vuelves a elegir uno, se descarga otra vez)
+    void PruneSprites() {
+        foreach (string sub in new string[] { "normal", "shiny" }) {
+            try {
+                string dir = Path.Combine(SpriteDir, sub);
+                if (!Directory.Exists(dir)) continue;
+                foreach (string f in Directory.GetFiles(dir, "*.png")) {
+                    int id;
+                    if (int.TryParse(Path.GetFileNameWithoutExtension(f), out id) && !recents.Exists(r => r.Key == id))
+                        try { File.Delete(f); } catch { }
+                }
+            } catch { }
+        }
     }
 
     // Menu "Aspecto": Claudio, Claudio OG, Pokemon recientes, separador, "Elegir Pokemon..."
