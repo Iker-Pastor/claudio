@@ -20,7 +20,9 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
+using System.Net;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -34,6 +36,7 @@ static class Win {
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
     [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
     [DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags);
+    [DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr h);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
@@ -457,15 +460,20 @@ class PetForm : Form {
     readonly ToolStripMenuItem miCustom, miRainbow, miColor;
     readonly ContextMenuStrip menu;
 
-    // ---------- Aspecto: Claudio (por defecto) o Clawitzer (sprite Gen 5 incrustado en el exe) ----------
+    // ---------- Aspecto: Claudio (por defecto) o cualquier Pokemon (sprite 2D Gen 5 de PokeAPI/sprites) ----------
     const int COLS = 14;                  // ancho logico de la mascota, en "pixeles"
-    string skin = "claudio";
+    string skin = "claudio";              // "claudio" | "pokemon"
+    int pokeId = 693; string pokeName = "Clawitzer";
     bool useSprite;                       // true = se dibuja el sprite en vez de Claudio
-    bool shiny = true;                    // variante de Clawitzer: shiny (rojo) o normal (azul)
+    bool shiny = true;                    // variante: shiny o normal
     Bitmap petImg;                        // sprite original, recortado al contenido
     Bitmap spr, sprFlip; int sprPX = -1;  // sprite ya escalado al tamano actual (normal y volteado)
     bool lastFlip;
-    readonly ToolStripMenuItem miSkin, miSkinClaudio, miSkinClaw, miNormal, miShiny;
+    readonly ToolStripMenuItem miSkin, miSkinClaudio, miSkinClaw, miSkinPick, miNormal, miShiny, miShow;
+    NotifyIcon tray;                      // icono junto al reloj: menu rapido y mostrar/ocultar
+    bool petHidden;
+    static readonly string SpriteDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MascotaClaude", "sprites");
+    const string SpriteUrl = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/versions/generation-v/black-white/";
     bool rainbow = false;        // modo arcoiris: el color va rotando
     double hue = 0;               // tono actual del arcoiris (0..360)
     static readonly string DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MascotaClaude");
@@ -582,6 +590,10 @@ class PetForm : Form {
         // ---------- Menu click derecho ----------
         menu = new ContextMenuStrip();
         menu.Items.Add("Abrir Claude", null, delegate { FocusClaude(); });
+        miShow = new ToolStripMenuItem("Mostrar mascota");
+        miShow.Checked = true;
+        miShow.Click += delegate { SetPetVisible(petHidden); };
+        menu.Items.Add(miShow);
 
         miColor = new ToolStripMenuItem("Color");
         for (int i = 0; i < PresetNames.Length; i++) {
@@ -609,10 +621,14 @@ class PetForm : Form {
         miSkin = new ToolStripMenuItem("Aspecto");
         miSkinClaudio = new ToolStripMenuItem("Claudio");
         miSkinClaudio.Click += delegate { SetSkin("claudio"); };
-        miSkinClaw = new ToolStripMenuItem("Clawitzer");
-        miSkinClaw.Click += delegate { SetSkin("clawitzer"); };
+        miSkinClaw = new ToolStripMenuItem(pokeName);   // el Pokemon actual; el texto se actualiza en ApplySkin
+        miSkinClaw.Click += delegate { SetSkin("pokemon"); };
+        miSkinPick = new ToolStripMenuItem("Elegir Pokémon...");
+        miSkinPick.Click += delegate { PickPokemon(); };
         miSkin.DropDownItems.Add(miSkinClaudio);
         miSkin.DropDownItems.Add(miSkinClaw);
+        miSkin.DropDownItems.Add(new ToolStripSeparator());
+        miSkin.DropDownItems.Add(miSkinPick);
         menu.Items.Add(miSkin);
 
         miStay = new ToolStripMenuItem("Quieta");
@@ -689,6 +705,13 @@ class PetForm : Form {
         menu.Items.Add("Salir", null, delegate { timer.Stop(); SetTeams(false); Close(); });
         ContextMenuStrip = menu;
 
+        // Icono junto al reloj: mismo menu; click izquierdo = mostrar / ocultar la mascota
+        tray = new NotifyIcon();
+        tray.Text = "Mascota Claude";
+        tray.ContextMenuStrip = menu;
+        tray.MouseClick += delegate(object s, MouseEventArgs ev) { if (ev.Button == MouseButtons.Left) SetPetVisible(petHidden); };
+        tray.Visible = true;
+
         LoadConfig();
         enumProc = OnEnumWindow;
         UpdateAcc(); UpdateAccChecks();
@@ -755,6 +778,7 @@ class PetForm : Form {
             SetTeams(false);
             keepTimer.Dispose();
             timer.Dispose(); bBody.Dispose(); bBlack.Dispose(); bHeart.Dispose(); bZ.Dispose();
+            tray.Visible = false; tray.Dispose();
             if (petImg != null) petImg.Dispose();
             if (spr != null) spr.Dispose();
             if (sprFlip != null) sprFlip.Dispose();
@@ -868,7 +892,9 @@ class PetForm : Form {
                 string k = line.Substring(0, eq).Trim(), v = line.Substring(eq + 1).Trim();
                 if (k == "color") baseColor = Color.FromArgb(255, Color.FromArgb(int.Parse(v, NumberStyles.HexNumber)));
                 else if (k == "arcoiris") rainbow = v == "1";
-                else if (k == "aspecto") skin = v;
+                else if (k == "aspecto") skin = v == "claudio" ? "claudio" : "pokemon";   // "clawitzer" = valor antiguo
+                else if (k == "pokemon") { int pid; if (int.TryParse(v, out pid) && pid > 0) pokeId = pid; }
+                else if (k == "nombre" && v.Length > 0) pokeName = v;
                 else if (k == "variante") shiny = v != "normal";
                 else if (k == "bocadillos") bubblesOn = v != "0";
                 else if (k == "ventanas") winsOn = v != "0";
@@ -887,6 +913,8 @@ class PetForm : Form {
                 "color=" + (baseColor.ToArgb() & 0xFFFFFF).ToString("X6") + "\r\n" +
                 "arcoiris=" + (rainbow ? "1" : "0") + "\r\n" +
                 "aspecto=" + skin + "\r\n" +
+                "pokemon=" + pokeId + "\r\n" +
+                "nombre=" + pokeName + "\r\n" +
                 "variante=" + (shiny ? "shiny" : "normal") + "\r\n" +
                 "bocadillos=" + (bubblesOn ? "1" : "0") + "\r\n" +
                 "ventanas=" + (winsOn ? "1" : "0") + "\r\n" +
@@ -899,14 +927,17 @@ class PetForm : Form {
     void SetShiny(bool s) { shiny = s; ApplySkin(); SaveConfig(); }
 
     void ApplySkin() {
-        if (skin == "clawitzer") {
-            Bitmap img = LoadSprite(shiny ? "clawitzer-shiny.png" : "clawitzer.png");
+        if (skin == "pokemon") {
+            string err;
+            Bitmap img = GetPokeSprite(pokeId, shiny, out err);
             if (img != null) { if (petImg != null) petImg.Dispose(); petImg = img; sprPX = -1; }
         }
-        useSprite = skin == "clawitzer" && petImg != null;
+        useSprite = skin == "pokemon" && petImg != null;
         if (!useSprite) skin = "claudio";
         miSkinClaudio.Checked = !useSprite;
+        miSkinClaw.Text = pokeName;
         miSkinClaw.Checked = useSprite;
+        UpdateTrayIcon();
         // "Color": paleta para Claudio, Normal/Shiny para Clawitzer
         foreach (ToolStripItem it in miColor.DropDownItems)
             it.Visible = (it == miNormal || it == miShiny) ? useSprite : !useSprite;
@@ -915,11 +946,177 @@ class PetForm : Form {
         Invalidate();
     }
 
-    // Lee el PNG incrustado en el exe, lo recorta al contenido y deja la transparencia "dura"
-    // (la ventana usa un color clave, asi que no puede haber pixeles semitransparentes).
-    static Bitmap LoadSprite(string resource) {
+    // ---------- Pokemon: sprites de PokeAPI/sprites (Gen 5, 2D), con cache en %LOCALAPPDATA%\MascotaClaude\sprites ----------
+    static byte[] Download(string url, int timeoutMs) {
+        ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;   // TLS 1.2
+        HttpWebRequest rq = (HttpWebRequest)WebRequest.Create(url);
+        rq.UserAgent = "MascotaClaude"; rq.Timeout = timeoutMs; rq.ReadWriteTimeout = timeoutMs;
+        using (WebResponse rs = rq.GetResponse())
+        using (Stream st = rs.GetResponseStream())
+        using (MemoryStream ms = new MemoryStream()) {
+            byte[] buf = new byte[16384]; int n;
+            while ((n = st.Read(buf, 0, buf.Length)) > 0) ms.Write(buf, 0, n);
+            return ms.ToArray();
+        }
+    }
+
+    static byte[] ReadResource(string name) {
+        using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream(name)) {
+            if (s == null) return null;
+            using (MemoryStream ms = new MemoryStream()) { s.CopyTo(ms); return ms.ToArray(); }
+        }
+    }
+
+    // Sprite del Pokemon (cache -> incrustado -> descarga). null + err si no se pudo.
+    static Bitmap GetPokeSprite(int id, bool shiny, out string err) {
+        err = null;
         try {
-            using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream(resource)) {
+            string dir = Path.Combine(SpriteDir, shiny ? "shiny" : "normal");
+            string f = Path.Combine(dir, id + ".png");
+            if (!File.Exists(f)) {
+                byte[] data = null;
+                if (id == 693) data = ReadResource(shiny ? "clawitzer-shiny.png" : "clawitzer.png");   // Clawitzer viene de serie
+                if (data == null) data = Download(SpriteUrl + (shiny ? "shiny/" : "") + id + ".png", 6000);
+                Directory.CreateDirectory(dir);
+                File.WriteAllBytes(f, data);
+            }
+            using (FileStream fs = File.OpenRead(f)) {
+                Bitmap b = LoadSprite(fs);
+                if (b == null) { err = "El sprite está vacío."; File.Delete(f); }
+                return b;
+            }
+        } catch (Exception ex) { err = ex.Message; return null; }
+    }
+
+    class PokeItem {
+        public int Id; public string Name;
+        public override string ToString() { return "#" + Id.ToString("000") + "  " + Name; }
+    }
+
+    // Lista de Pokemon (id + nombre) de la PokeAPI, guardada en cache la primera vez
+    static List<PokeItem> LoadDex() {
+        string f = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MascotaClaude", "pokedex.txt");
+        List<PokeItem> list = new List<PokeItem>();
+        try {
+            string[] lines;
+            if (File.Exists(f)) lines = File.ReadAllLines(f);
+            else {
+                string json = System.Text.Encoding.UTF8.GetString(Download("https://pokeapi.co/api/v2/pokemon?limit=1025", 10000));
+                List<string> l = new List<string>();
+                foreach (Match m in Regex.Matches(json, "\"name\":\"([^\"]+)\",\"url\":\"[^\"]*/pokemon/(\\d+)/\""))
+                    l.Add(m.Groups[2].Value + "|" + m.Groups[1].Value);
+                if (l.Count == 0) return null;
+                Directory.CreateDirectory(Path.GetDirectoryName(f));
+                File.WriteAllLines(f, l.ToArray());
+                lines = l.ToArray();
+            }
+            foreach (string line in lines) {
+                int bar = line.IndexOf('|'); int id;
+                if (bar < 0 || !int.TryParse(line.Substring(0, bar), out id)) continue;
+                string n = line.Substring(bar + 1);
+                list.Add(new PokeItem { Id = id, Name = char.ToUpper(n[0]) + n.Substring(1) });
+            }
+            return list.Count > 0 ? list : null;
+        } catch { return null; }
+    }
+
+    void PickPokemon() {
+        List<PokeItem> dex;
+        Cursor old = Cursor.Current; Cursor.Current = Cursors.WaitCursor;
+        try { dex = LoadDex(); } finally { Cursor.Current = old; }
+        if (dex == null) {
+            MessageBox.Show("No he podido descargar la lista de Pokémon (¿sin conexión?).", "Mascota", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        using (Form f = new Form())
+        using (TextBox tb = new TextBox())
+        using (ListBox lb = new ListBox())
+        using (CheckBox cs = new CheckBox())
+        using (Button ok = new Button())
+        using (Button cancel = new Button()) {
+            f.Text = "Elegir Pokémon"; f.FormBorderStyle = FormBorderStyle.FixedDialog;
+            f.StartPosition = FormStartPosition.CenterScreen; f.ClientSize = new Size(300, 410);
+            f.MaximizeBox = false; f.MinimizeBox = false; f.ShowInTaskbar = false; f.TopMost = true;
+            tb.SetBounds(10, 10, 280, 24);
+            lb.SetBounds(10, 42, 280, 290);
+            cs.SetBounds(10, 342, 280, 24); cs.Text = "Shiny"; cs.Checked = shiny;
+            ok.SetBounds(130, 374, 75, 28); ok.Text = "Aplicar"; ok.DialogResult = DialogResult.OK;
+            cancel.SetBounds(215, 374, 75, 28); cancel.Text = "Cancelar"; cancel.DialogResult = DialogResult.Cancel;
+            f.AcceptButton = ok; f.CancelButton = cancel;
+            f.Controls.AddRange(new Control[] { tb, lb, cs, ok, cancel });
+            Action fill = delegate {
+                string q = tb.Text.Trim().ToLowerInvariant().TrimStart('#');
+                lb.BeginUpdate(); lb.Items.Clear();
+                foreach (PokeItem it in dex)
+                    if (q.Length == 0 || it.Name.ToLowerInvariant().Contains(q) || it.Id.ToString().StartsWith(q) || it.Id.ToString("000").StartsWith(q))
+                        lb.Items.Add(it);
+                lb.EndUpdate();
+                if (lb.Items.Count > 0) lb.SelectedIndex = 0;
+            };
+            tb.TextChanged += delegate { fill(); };
+            lb.DoubleClick += delegate { if (lb.SelectedItem != null) ok.PerformClick(); };
+            fill();
+            for (int i = 0; i < lb.Items.Count; i++) if (((PokeItem)lb.Items[i]).Id == pokeId) { lb.SelectedIndex = i; break; }
+            f.Shown += delegate { tb.Focus(); };
+            if (f.ShowDialog() != DialogResult.OK || lb.SelectedItem == null) return;
+            PokeItem sel = (PokeItem)lb.SelectedItem;
+            SetPokemon(sel.Id, sel.Name, cs.Checked);
+        }
+    }
+
+    // Descarga (si hace falta) y aplica; si no hay sprite se queda como estaba
+    void SetPokemon(int id, string name, bool sh) {
+        string err; Bitmap img;
+        Cursor old = Cursor.Current; Cursor.Current = Cursors.WaitCursor;
+        try { img = GetPokeSprite(id, sh, out err); } finally { Cursor.Current = old; }
+        if (img == null) {
+            MessageBox.Show("No he podido cargar el sprite de " + name + (sh ? " (shiny)" : "") + ".\r\n" + err, "Mascota", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        img.Dispose();   // ApplySkin lo vuelve a leer de la cache
+        pokeId = id; pokeName = name; shiny = sh; skin = "pokemon";
+        ApplySkin(); SaveConfig();
+    }
+
+    // ---------- Icono junto al reloj y mostrar / ocultar ----------
+    void SetPetVisible(bool v) {
+        petHidden = !v;
+        miShow.Checked = v;
+        if (v) { Show(); TopMost = true; }
+        else { HideBubble(); Hide(); }
+    }
+
+    void UpdateTrayIcon() {
+        if (tray == null) return;
+        try {
+            using (Bitmap b = new Bitmap(32, 32, PixelFormat.Format32bppArgb))
+            using (Graphics g = Graphics.FromImage(b)) {
+                g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                g.PixelOffsetMode = PixelOffsetMode.Half;
+                if (useSprite && petImg != null) {
+                    double k = Math.Min(30.0 / petImg.Width, 30.0 / petImg.Height);
+                    if (k >= 1) k = Math.Floor(k); else g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    int w = (int)Math.Round(petImg.Width * k), h = (int)Math.Round(petImg.Height * k);
+                    g.DrawImage(petImg, new Rectangle((32 - w) / 2, (32 - h) / 2, w, h), 0, 0, petImg.Width, petImg.Height, GraphicsUnit.Pixel);
+                } else {
+                    using (SolidBrush br = new SolidBrush(Orange))
+                        for (int y = 0; y < Body.Length + 2; y++) {
+                            string row = y < Body.Length ? Body[y] : LegsA;
+                            for (int x = 0; x < row.Length; x++) if (row[x] != '.') g.FillRectangle(br, 2 + x * 2, 7 + y * 2, 2, 2);
+                        }
+                }
+                IntPtr h2 = b.GetHicon();
+                using (Icon tmp = Icon.FromHandle(h2)) tray.Icon = (Icon)tmp.Clone();
+                Win.DestroyIcon(h2);
+            }
+        } catch { }
+    }
+
+    // Lee un PNG, lo recorta al contenido y deja la transparencia "dura"
+    // (la ventana usa un color clave, asi que no puede haber pixeles semitransparentes).
+    static Bitmap LoadSprite(Stream s) {
+        try {
+            {
                 if (s == null) return null;
                 using (Bitmap src = new Bitmap(s)) {
                     int x0 = src.Width, y0 = src.Height, x1 = -1, y1 = -1;
@@ -2122,6 +2319,7 @@ class PetForm : Form {
 
     // ---------- Bucle de animacion ----------
     void OnTick(object sender, EventArgs e) {
+        if (petHidden) return;   // oculta: congelada (Teams en verde sigue, tiene su propio temporizador)
         tick++;
         if (tick % 100 == 0) RefreshAreas();   // por si cambia la barra de tareas
         Think();
