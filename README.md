@@ -20,7 +20,7 @@ Una mascota virtual de escritorio para Windows, hecha en C# + Windows Forms. Es 
 
 - **Subirse a ventanas**: camina por el borde superior de las ventanas visibles de otras apps (ignora minimizadas, ocultas, sin título, "cloaked" y maximizadas). Si la ventana se mueve, la acompaña; si se cierra, se minimiza o la tapa otra, cae con física. Al caer puede aterrizar en una ventana y a veces salta a una cercana. Opción de menú *Subir a ventanas* (se guarda). La lista de ventanas se refresca ~1 vez por segundo.
 - **Reacciona a eventos** (bocadillo + ánimo): batería baja (<20 % sin cargador, una vez por bajada), cargador conectado y "¡Claude te ha respondido!" cuando la ventana de Claude parpadea en la barra de tareas (hook `HSHELL_FLASH`; depende de que la app de Claude pida atención al terminar, y se ignora si pasan menos de 15 s desde el último aviso).
-- **Recordatorios personalizables** en un archivo de texto, `%LOCALAPPDATA%\MascotaClaude\recordatorios.txt` (menú *Recordatorios* → *Editar recordatorios.txt...* lo abre en el Bloc de notas; *Abrir carpeta* lo muestra en el Explorador). Una línea por aviso, `CUÁNDO | MENSAJE | ÁNIMO`, y al guardar la mascota lo recarga sola en unos segundos (te avisa de cuántos hay activos o de la línea que no entiende). Ejemplos:
+- **Recordatorios personalizables** en un archivo de texto, `recordatorios.txt`, que la mascota crea al arrancar en su misma carpeta, junto a `mascota.vbs` (si tenías uno de la versión anterior en `%LOCALAPPDATA%\MascotaClaude`, lo copia; está en `.gitignore` para que tus avisos no choquen al actualizar) (menú *Recordatorios* → *Editar recordatorios.txt...* lo abre en el Bloc de notas; *Abrir carpeta* lo muestra en el Explorador). Una línea por aviso, `CUÁNDO | MENSAJE | ÁNIMO`, y al guardar la mascota lo recarga sola en unos segundos (te avisa de cuántos hay activos o de la línea que no entiende). Ejemplos:
 
   ```
   L-V 15:00 | ¡Hora de salir! | feliz
@@ -61,6 +61,7 @@ Haz doble clic en `mascota.vbs`. La primera vez (y cada vez que modifiques `masc
 |---|---|
 | `mascota.cs` | Código principal (sprite, física, animación, menú) |
 | `mascota.vbs` | Lanzador: compila `mascota.exe` si hace falta y lo arranca |
+| `recordatorios.txt` | Tus recordatorios (lo crea la mascota al arrancar; no se sube al repositorio) |
 | `activar-inicio.bat` / `desactivar-inicio.bat` | Gestión del arranque automático |
 
 ## Personalización
