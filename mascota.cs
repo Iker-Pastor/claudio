@@ -59,6 +59,136 @@ static class Win {
 enum Mode { Floor, WallL, WallR, Ceiling, Air }
 enum Mood { Normal, Feliz, Aburrida, Mareada, Dormida }
 
+// Recordatorio personalizado, leido de recordatorios.txt (una linea = un aviso).
+//   [dias] [fecha] (HH:MM | cada N [HH:MM-HH:MM]) | mensaje [| animo]
+class Reminder {
+    public string Key, Text;
+    public Mood M = Mood.Normal;
+    public int Every;                 // minutos entre avisos (0 = a hora fija)
+    public int At = -1;               // minuto del dia del aviso a hora fija
+    public int From = -1, To = -1;    // franja horaria para los "cada N" (minuto del dia)
+    public int Days = 127;            // bit 0 = lunes ... bit 6 = domingo
+    public int Year, Month, Day;      // fecha concreta (0 = cualquiera)
+    public int Next, LastDay;         // proximo aviso (TickCount) y ultimo dia avisado
+
+    static int ParseHM(string s) {
+        int c = s.IndexOf(':'), h, m;
+        if (c < 1 || !int.TryParse(s.Substring(0, c), out h) || !int.TryParse(s.Substring(c + 1), out m)) return -1;
+        if (h < 0 || h > 23 || m < 0 || m > 59 || s.Length - c != 3) return -1;
+        return h * 60 + m;
+    }
+
+    const string DayLetters = "lmxjvsd";
+
+    // "L-V", "L,X,V", "S-D", "LXV"... -> mascara de bits; 0 si no es un dia
+    static int ParseDays(string s) {
+        if (s == "diario" || s == "todos") return 127;
+        if (s == "laborables") return 31;
+        if (s == "finde") return 96;
+        int mask = 0;
+        for (int i = 0; i < s.Length; i++) {
+            char ch = s[i];
+            if (ch == ',') continue;
+            int d = DayLetters.IndexOf(ch);
+            if (d < 0) return 0;
+            if (i + 2 < s.Length && s[i + 1] == '-') {
+                int e = DayLetters.IndexOf(s[i + 2]);
+                if (e < 0) return 0;
+                for (int k = d; ; k = (k + 1) % 7) { mask |= 1 << k; if (k == e) break; }
+                i += 2;
+            } else mask |= 1 << d;
+        }
+        return mask;
+    }
+
+    bool ParseDate(string s) {
+        int y = 0, mo, d;
+        string[] p;
+        if (s.IndexOf('-') > 0) {             // 2026-12-24
+            p = s.Split('-');
+            if (p.Length != 3 || p[0].Length != 4 || !int.TryParse(p[0], out y) || !int.TryParse(p[1], out mo) || !int.TryParse(p[2], out d)) return false;
+        } else if (s.IndexOf('/') > 0) {      // 24/12 o 24/12/2026
+            p = s.Split('/');
+            if (p.Length < 2 || p.Length > 3 || !int.TryParse(p[0], out d) || !int.TryParse(p[1], out mo)) return false;
+            if (p.Length == 3 && !int.TryParse(p[2], out y)) return false;
+        } else return false;
+        if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+        Year = y; Month = mo; Day = d;
+        return true;
+    }
+
+    // Devuelve null si la linea esta vacia o es un comentario; lanza FormatException si no se entiende.
+    public static Reminder Parse(string line) {
+        string t = line.Trim();
+        if (t.Length == 0 || t[0] == '#') return null;
+        string[] parts = t.Split('|');
+        if (parts.Length < 2 || parts[1].Trim().Length == 0) throw new FormatException("falta el mensaje (separa con |)");
+        Reminder r = new Reminder();
+        r.Text = parts[1].Trim();
+        if (parts.Length > 2) {
+            string a = parts[2].Trim().ToLowerInvariant();
+            if (a == "feliz") r.M = Mood.Feliz;
+            else if (a == "aburrida" || a == "triste") r.M = Mood.Aburrida;
+            else if (a == "mareada") r.M = Mood.Mareada;
+            else if (a != "" && a != "normal") throw new FormatException("ánimo desconocido: " + parts[2].Trim());
+        }
+        string[] tok = parts[0].Trim().ToLowerInvariant().Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+        bool daysSet = false;
+        for (int i = 0; i < tok.Length; i++) {
+            string s = tok[i];
+            if (s == "cada") {
+                if (i + 1 >= tok.Length) throw new FormatException("falta el número de minutos tras 'cada'");
+                string n = tok[++i]; int mult = 1;
+                if (n.EndsWith("min")) n = n.Substring(0, n.Length - 3);
+                else if (n.EndsWith("m")) n = n.Substring(0, n.Length - 1);
+                else if (n.EndsWith("h")) { n = n.Substring(0, n.Length - 1); mult = 60; }
+                int v;
+                if (!int.TryParse(n, out v) || v <= 0) throw new FormatException("minutos no válidos: " + tok[i]);
+                r.Every = v * mult;
+                if (i + 1 < tok.Length && (tok[i + 1] == "min" || tok[i + 1] == "minutos")) i++;
+                else if (i + 1 < tok.Length && (tok[i + 1] == "h" || tok[i + 1] == "horas" || tok[i + 1] == "hora")) { r.Every = v * 60; i++; }
+                continue;
+            }
+            int dash = s.IndexOf('-');
+            if (s.IndexOf(':') > 0 && dash > 0) {   // franja 09:00-18:00
+                r.From = ParseHM(s.Substring(0, dash)); r.To = ParseHM(s.Substring(dash + 1));
+                if (r.From < 0 || r.To < 0) throw new FormatException("franja no válida: " + s);
+                continue;
+            }
+            if (s.IndexOf(':') > 0) {
+                r.At = ParseHM(s);
+                if (r.At < 0) throw new FormatException("hora no válida: " + s);
+                continue;
+            }
+            if (char.IsDigit(s[0])) {
+                if (!r.ParseDate(s)) throw new FormatException("fecha no válida: " + s);
+                continue;
+            }
+            int dm = ParseDays(s);
+            if (dm == 0) throw new FormatException("no entiendo '" + s + "'");
+            r.Days = daysSet ? r.Days | dm : dm; daysSet = true;
+        }
+        if (r.Every > 0 && r.At >= 0) throw new FormatException("usa una hora fija o 'cada N', no las dos");
+        if (r.Every == 0 && r.At < 0) throw new FormatException("falta la hora (HH:MM) o 'cada N'");
+        if (r.From >= 0 && r.Every == 0) throw new FormatException("la franja HH:MM-HH:MM solo vale con 'cada N'");
+        r.Key = string.Join(" ", tok) + "|" + r.Text + "|" + r.M;
+        return r;
+    }
+
+    public bool DateOk(DateTime dt) {
+        int dow = ((int)dt.DayOfWeek + 6) % 7;     // lunes = 0
+        if ((Days & (1 << dow)) == 0) return false;
+        if (Month != 0 && (dt.Month != Month || dt.Day != Day)) return false;
+        if (Year != 0 && dt.Year != Year) return false;
+        return true;
+    }
+
+    public bool InWindow(int min) {
+        if (From < 0) return true;
+        return From <= To ? min >= From && min < To : min >= From || min < To;   // la franja puede cruzar la medianoche
+    }
+}
+
 // Ventana de otra app: caja visible y si se puede andar por su borde superior
 class WinInfo { public IntPtr H; public Rectangle R; public bool Usable; }
 
@@ -328,6 +458,7 @@ class PetForm : Form {
     double hue = 0;               // tono actual del arcoiris (0..360)
     static readonly string DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MascotaClaude");
     static readonly string ConfigPath = Path.Combine(DataDir, "config.txt");
+    static readonly string RemPath = Path.Combine(DataDir, "recordatorios.txt");
 
     // ---------- Animo, bocadillos, sueno y mirada ----------
     // Frases de los bocadillos: edita estas listas a tu gusto.
@@ -363,15 +494,19 @@ class PetForm : Form {
     static readonly string[] ZGlyph = { "XXX", "..X", ".X.", "X..", "XXX" };
 
     // ---------- Ventanas, avisos y recordatorios ----------
-    const int POMO_WORK_MIN = 25, POMO_BREAK_MIN = 5, WATER_MIN = 60, STRETCH_MIN = 50;
+    const int POMO_WORK_MIN = 25, POMO_BREAK_MIN = 5;
     readonly uint ownPid = (uint)Process.GetCurrentProcess().Id;
     readonly List<WinInfo> wins = new List<WinInfo>();
     readonly Win.EnumProc enumProc;
     bool winsOn = true, onWin = false, jumping = false;
     IntPtr perchHwnd; Rectangle perchRect;            // ventana sobre la que anda
-    ToolStripMenuItem miWins, miRem, miPomo, miWater, miStretch, miGym;
-    bool pomoOn, pomoWork, waterOn, stretchOn, gymOn;  // pomodoro no se guarda: solo agua, estirar y gimnasio
-    int pomoEnd, waterNext, stretchNext, leaveDay, gymDay;
+    ToolStripMenuItem miWins, miRem, miPomo;
+    bool pomoOn, pomoWork;                            // el pomodoro no se guarda (empieza parado)
+    int pomoEnd;
+    List<Reminder> rems = new List<Reminder>();       // recordatorios de recordatorios.txt
+    DateTime remStamp = DateTime.MinValue;            // fecha de modificacion del archivo ya cargado
+    bool remLoaded;                                   // ya se cargo una vez (las siguientes recargas se anuncian)
+    bool oldWater, oldStretch, oldGym;                // opciones de versiones anteriores (para crear el archivo)
     bool bubbleImportant;
     bool lowWarned; PowerLineStatus lastLine = PowerLineStatus.Unknown;
     uint shellMsg; int lastFlashMs;
@@ -508,27 +643,16 @@ class PetForm : Form {
                 SayText("Pomodoro en marcha: " + POMO_WORK_MIN + " min de trabajo.", true);
             } else SayText("Pomodoro parado.", true);
         };
-        miWater = new ToolStripMenuItem("Beber agua (cada " + WATER_MIN + " min)");
-        miWater.CheckOnClick = true;
-        miWater.CheckedChanged += delegate {
-            waterOn = miWater.Checked;
-            if (waterOn) waterNext = Environment.TickCount + WATER_MIN * 60000;
-            SaveConfig();
-        };
-        miStretch = new ToolStripMenuItem("Pausa activa (cada " + STRETCH_MIN + " min)");
-        miStretch.CheckOnClick = true;
-        miStretch.CheckedChanged += delegate {
-            stretchOn = miStretch.Checked;
-            if (stretchOn) stretchNext = Environment.TickCount + STRETCH_MIN * 60000;
-            SaveConfig();
-        };
-        miGym = new ToolStripMenuItem("Gimnasio a las 15:30 (L-V)");
-        miGym.CheckOnClick = true;
-        miGym.CheckedChanged += delegate { gymOn = miGym.Checked; SaveConfig(); };
         miRem.DropDownItems.Add(miPomo);
-        miRem.DropDownItems.Add(miWater);
-        miRem.DropDownItems.Add(miStretch);
-        miRem.DropDownItems.Add(miGym);
+        miRem.DropDownItems.Add(new ToolStripSeparator());
+        miRem.DropDownItems.Add("Editar recordatorios.txt...", null, delegate {
+            EnsureRemFile();
+            try { Process.Start("notepad.exe", "\"" + RemPath + "\""); } catch { }
+        });
+        miRem.DropDownItems.Add("Abrir carpeta", null, delegate {
+            EnsureRemFile();
+            try { Process.Start("explorer.exe", "/select,\"" + RemPath + "\""); } catch { }
+        });
         menu.Items.Add(miRem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Salir", null, delegate { timer.Stop(); SetTeams(false); Close(); });
@@ -540,9 +664,7 @@ class PetForm : Form {
         lastNearMs = Environment.TickCount;
         miBubbles.Checked = bubblesOn;
         miWins.Checked = winsOn;
-        miWater.Checked = waterOn; miStretch.Checked = stretchOn; miGym.Checked = gymOn;
-        int t0 = Environment.TickCount;
-        waterNext = t0 + WATER_MIN * 60000; stretchNext = t0 + STRETCH_MIN * 60000;
+        EnsureRemFile();   // se carga en el primer tick (ya con la ventana visible para poder avisar de errores)
         lastActMs = Environment.TickCount; lastRealInput = (uint)Environment.TickCount;
         nextChatter = 6000 + rand.Next(9840);       // ~3-8 min (30 ms por tick)
         SetBodyColor(baseColor);
@@ -712,9 +834,9 @@ class PetForm : Form {
                 else if (k == "arcoiris") rainbow = v == "1";
                 else if (k == "bocadillos") bubblesOn = v != "0";
                 else if (k == "ventanas") winsOn = v != "0";
-                else if (k == "agua") waterOn = v == "1";
-                else if (k == "estirar") stretchOn = v == "1";
-                else if (k == "gimnasio") gymOn = v == "1";
+                else if (k == "agua") oldWater = v == "1";        // antiguas opciones del menu: solo se usan
+                else if (k == "estirar") oldStretch = v == "1";   // al crear recordatorios.txt por primera vez
+                else if (k == "gimnasio") oldGym = v == "1";
                 else if (k == "accesorio") { int ai = Array.IndexOf(AccKeys, v); if (ai >= 0) accMode = ai - 1; }
             }
         } catch { }
@@ -728,9 +850,6 @@ class PetForm : Form {
                 "arcoiris=" + (rainbow ? "1" : "0") + "\r\n" +
                 "bocadillos=" + (bubblesOn ? "1" : "0") + "\r\n" +
                 "ventanas=" + (winsOn ? "1" : "0") + "\r\n" +
-                "agua=" + (waterOn ? "1" : "0") + "\r\n" +
-                "estirar=" + (stretchOn ? "1" : "0") + "\r\n" +
-                "gimnasio=" + (gymOn ? "1" : "0") + "\r\n" +
                 "accesorio=" + AccKeys[accMode + 1] + "\r\n");
         } catch { }
     }
@@ -1411,26 +1530,113 @@ class PetForm : Form {
     void Reminders() {
         if (!CanAlert() || (bubbleImportant && bubbleTicks > 0)) return;
         int now = Environment.TickCount;
-        DateTime dt = DateTime.Now;
-        bool weekday = dt.DayOfWeek != DayOfWeek.Saturday && dt.DayOfWeek != DayOfWeek.Sunday;
-        int dayKey = dt.Year * 1000 + dt.DayOfYear;
-        if (weekday && dt.Hour == 15 && dt.Minute < 10 && leaveDay != dayKey) {
-            leaveDay = dayKey; Alert("¡Hora de salir!", Mood.Feliz, 300); return;
-        }
-        if (gymOn && weekday && dt.Hour == 15 && dt.Minute >= 30 && dt.Minute < 40 && gymDay != dayKey) {
-            gymDay = dayKey; Alert("¡Hora de ir al gimnasio!", Mood.Feliz, 300); return;
-        }
         if (pomoOn && now - pomoEnd >= 0) {
             if (pomoWork) { pomoWork = false; pomoEnd = now + POMO_BREAK_MIN * 60000; Alert("¡Descanso de " + POMO_BREAK_MIN + " min! Levántate un poco.", Mood.Feliz, 300); }
             else { pomoWork = true; pomoEnd = now + POMO_WORK_MIN * 60000; Alert("Se acabó el descanso: ¡otros " + POMO_WORK_MIN + " min de trabajo!", Mood.Normal, 0); }
             return;
         }
-        if (waterOn && now - waterNext >= 0) {
-            waterNext = now + WATER_MIN * 60000; Alert("Toca beber agua.", Mood.Normal, 0); return;
+        DateTime dt = DateTime.Now;
+        int min = dt.Hour * 60 + dt.Minute;
+        int dayKey = dt.Year * 1000 + dt.DayOfYear;
+        foreach (Reminder r in rems) {
+            if (r.Every > 0) {
+                if (now - r.Next < 0) continue;
+                r.Next = now + r.Every * 60000;
+                if (!r.DateOk(dt) || !r.InWindow(min)) continue;   // fuera de dia/franja: se salta este aviso
+            } else {
+                // a hora fija: si estaba dormida o con otro aviso, aun sale en los 10 min siguientes
+                int late = (min - r.At + 1440) % 1440;
+                if (late >= 10 || r.LastDay == dayKey || !r.DateOk(min < r.At ? dt.AddDays(-1) : dt)) continue;
+                r.LastDay = dayKey;
+            }
+            Alert(r.Text, r.M, r.M == Mood.Normal ? 0 : 300);
+            return;
         }
-        if (stretchOn && now - stretchNext >= 0) {
-            stretchNext = now + STRETCH_MIN * 60000; Alert("Pausa activa: levántate y estírate un poco.", Mood.Normal, 0); return;
+    }
+
+    // ---------- Recordatorios personalizados (recordatorios.txt) ----------
+    const string RemHelp =
+        "# Recordatorios de la mascota\r\n" +
+        "# ----------------------------\r\n" +
+        "# Una línea por aviso:   CUÁNDO | MENSAJE | ÁNIMO (opcional)\r\n" +
+        "# Guarda el archivo y la mascota lo recarga sola en unos segundos.\r\n" +
+        "# Las líneas que empiezan por # se ignoran (quita la # para activar un ejemplo).\r\n" +
+        "#\r\n" +
+        "# CUÁNDO puede ser:\r\n" +
+        "#   15:30                  todos los días a las 15:30\r\n" +
+        "#   cada 45                cada 45 minutos (también vale: cada 45 min, cada 2h)\r\n" +
+        "#   cada 60 09:00-18:00    cada hora, solo dentro de esa franja\r\n" +
+        "#   y delante, si quieres, los días y/o una fecha:\r\n" +
+        "#     L M X J V S D        días sueltos o rangos: L-V, S-D, L,X,V\r\n" +
+        "#     laborables / finde   atajos para L-V y S-D\r\n" +
+        "#     24/12  o  2026-12-24 una fecha concreta (sin año = todos los años)\r\n" +
+        "#\r\n" +
+        "# ÁNIMO: normal (por defecto), feliz (da un saltito), aburrida o mareada.\r\n" +
+        "#\r\n" +
+        "# Los avisos salen aunque silencies los bocadillos. Si está dormida, los de hora fija\r\n" +
+        "# esperan hasta 10 minutos a que despierte; los de 'cada N' se saltan esa vez.\r\n" +
+        "# (El Pomodoro sigue en el menú Recordatorios.)\r\n" +
+        "\r\n";
+
+    void EnsureRemFile() {
+        try {
+            if (File.Exists(RemPath)) return;
+            Directory.CreateDirectory(DataDir);
+            string c = RemHelp +
+                "L-V 15:00 | ¡Hora de salir! | feliz\r\n" +
+                (oldGym ? "" : "#") + "L-V 15:30 | ¡Hora de ir al gimnasio! | feliz\r\n" +
+                (oldWater ? "" : "#") + "cada 60 | Toca beber agua.\r\n" +
+                (oldStretch ? "" : "#") + "cada 50 | Pausa activa: levántate y estírate un poco.\r\n" +
+                "\r\n" +
+                "# Más ejemplos:\r\n" +
+                "#laborables 13:45 | ¡A comer! | feliz\r\n" +
+                "#cada 20 09:00-19:00 | Regla 20-20-20: mira algo lejano 20 segundos.\r\n" +
+                "#V 17:00 | ¡Viernes! Apunta lo pendiente para el lunes.\r\n" +
+                "#24/12 18:00 | ¡Feliz Nochebuena! | feliz\r\n";
+            File.WriteAllText(RemPath, c, new System.Text.UTF8Encoding(true));   // con BOM: el Bloc de notas respeta las tildes
+        } catch { }
+    }
+
+    // Lee el texto en UTF-8; si no lo es (guardado como ANSI), con la codificacion del sistema
+    static string[] ReadLinesAnyEncoding(string path) {
+        byte[] b = File.ReadAllBytes(path);
+        string txt;
+        try { txt = new System.Text.UTF8Encoding(false, true).GetString(b); }
+        catch (System.Text.DecoderFallbackException) { txt = System.Text.Encoding.Default.GetString(b); }
+        if (txt.Length > 0 && txt[0] == '﻿') txt = txt.Substring(1);
+        return txt.Replace("\r\n", "\n").Split('\n');
+    }
+
+    // Recarga si el archivo ha cambiado. announce = decir que se han actualizado.
+    void LoadReminders(bool announce) {
+        DateTime stamp;
+        string[] lines;
+        try {
+            if (!File.Exists(RemPath)) { if (rems.Count > 0) rems = new List<Reminder>(); remStamp = DateTime.MinValue; return; }
+            stamp = File.GetLastWriteTimeUtc(RemPath);
+            if (stamp == remStamp) return;
+            lines = ReadLinesAnyEncoding(RemPath);
+        } catch { return; }   // p. ej. el editor lo tiene bloqueado mientras guarda: se reintenta luego
+        remStamp = stamp; remLoaded = true;
+        // conservar el estado (proximo aviso, ya avisado hoy) de las lineas que no han cambiado
+        Dictionary<string, Reminder> old = new Dictionary<string, Reminder>();
+        foreach (Reminder r in rems) old[r.Key] = r;
+        List<Reminder> list = new List<Reminder>();
+        string err = null;
+        int now = Environment.TickCount;
+        for (int i = 0; i < lines.Length; i++) {
+            Reminder r;
+            try { r = Reminder.Parse(lines[i]); }
+            catch (FormatException e) { if (err == null) err = "recordatorios.txt, línea " + (i + 1) + ": " + e.Message; continue; }
+            if (r == null) continue;
+            Reminder prev;
+            if (old.TryGetValue(r.Key, out prev)) { r.Next = prev.Next; r.LastDay = prev.LastDay; old.Remove(r.Key); }
+            else r.Next = now + r.Every * 60000;
+            list.Add(r);
         }
+        rems = list;
+        if (err != null) Alert("No entiendo " + err, Mood.Mareada, 120);
+        else if (announce) Alert("Recordatorios actualizados (" + list.Count + " activos).", Mood.Feliz, 120);
     }
 
     // ---------- Subirse a ventanas ----------
@@ -1752,6 +1958,7 @@ class PetForm : Form {
 
         if (winsOn && tick % 33 == 5 && (onWin || mood != Mood.Dormida)) RefreshWindows();
         if (tick % 33 == 11) Reminders();
+        if (tick % 100 == 37) LoadReminders(remLoaded);   // ~3 s: recarga recordatorios.txt si se ha editado
         if (tick % 165 == 50) CheckPower();
 
         if (--nextChatter <= 0) {
