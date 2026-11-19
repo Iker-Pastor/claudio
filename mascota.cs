@@ -17,8 +17,10 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -454,7 +456,17 @@ class PetForm : Form {
     readonly ToolStripMenuItem[] miPresets = new ToolStripMenuItem[PresetNames.Length];
     readonly ToolStripMenuItem miCustom, miRainbow, miColor;
     readonly ContextMenuStrip menu;
-    bool rainbow = false;         // modo arcoiris: el color va rotando
+
+    // ---------- Aspecto: Claudio (por defecto) o Clawitzer (sprite Gen 5 incrustado en el exe) ----------
+    const int COLS = 14;                  // ancho logico de la mascota, en "pixeles"
+    string skin = "claudio";
+    bool useSprite;                       // true = se dibuja el sprite en vez de Claudio
+    bool shiny = true;                    // variante de Clawitzer: shiny (rojo) o normal (azul)
+    Bitmap petImg;                        // sprite original, recortado al contenido
+    Bitmap spr, sprFlip; int sprPX = -1;  // sprite ya escalado al tamano actual (normal y volteado)
+    bool lastFlip;
+    readonly ToolStripMenuItem miSkin, miSkinClaudio, miSkinClaw, miNormal, miShiny;
+    bool rainbow = false;        // modo arcoiris: el color va rotando
     double hue = 0;               // tono actual del arcoiris (0..360)
     static readonly string DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MascotaClaude");
     static readonly string ConfigPath = Path.Combine(DataDir, "config.txt");
@@ -551,7 +563,7 @@ class PetForm : Form {
     Mood lastMood = Mood.Normal; int lastLX, lastLY, lastAnim = -1; bool lastLying;
 
     public PetForm() {
-        W = Body[0].Length * PX; H = W; SZ = W + 2 * M;
+        W = COLS * PX; H = W; SZ = W + 2 * M;
 
         FormBorderStyle = FormBorderStyle.None;
         TopMost = true;
@@ -585,7 +597,23 @@ class PetForm : Form {
         miRainbow = new ToolStripMenuItem("Arcoíris", RainbowSwatch());
         miRainbow.Click += delegate { rainbow = true; UpdateColorChecks(); SaveConfig(); };
         miColor.DropDownItems.Add(miRainbow);
+        // Con Clawitzer, "Color" ofrece sus dos variantes en vez de la paleta
+        miNormal = new ToolStripMenuItem("Normal");
+        miNormal.Click += delegate { SetShiny(false); };
+        miShiny = new ToolStripMenuItem("Shiny");
+        miShiny.Click += delegate { SetShiny(true); };
+        miColor.DropDownItems.Add(miNormal);
+        miColor.DropDownItems.Add(miShiny);
         menu.Items.Add(miColor);
+
+        miSkin = new ToolStripMenuItem("Aspecto");
+        miSkinClaudio = new ToolStripMenuItem("Claudio");
+        miSkinClaudio.Click += delegate { SetSkin("claudio"); };
+        miSkinClaw = new ToolStripMenuItem("Clawitzer");
+        miSkinClaw.Click += delegate { SetSkin("clawitzer"); };
+        miSkin.DropDownItems.Add(miSkinClaudio);
+        miSkin.DropDownItems.Add(miSkinClaw);
+        menu.Items.Add(miSkin);
 
         miStay = new ToolStripMenuItem("Quieta");
         miStay.Click += delegate {
@@ -672,6 +700,7 @@ class PetForm : Form {
         nextChatter = 6000 + rand.Next(9840);       // ~3-8 min (30 ms por tick)
         SetBodyColor(baseColor);
         UpdateColorChecks();
+        ApplySkin();
 
         SystemEvents.DisplaySettingsChanged += OnDisplayChanged;
         ApplyMenuTheme();
@@ -726,6 +755,9 @@ class PetForm : Form {
             SetTeams(false);
             keepTimer.Dispose();
             timer.Dispose(); bBody.Dispose(); bBlack.Dispose(); bHeart.Dispose(); bZ.Dispose();
+            if (petImg != null) petImg.Dispose();
+            if (spr != null) spr.Dispose();
+            if (sprFlip != null) sprFlip.Dispose();
             bubble.Dispose();
             if (fx != null) fx.Dispose();
             bRed.Dispose(); bWhite.Dispose(); bPurple.Dispose(); bGold.Dispose(); bPink.Dispose(); bBlue.Dispose();
@@ -751,6 +783,7 @@ class PetForm : Form {
         ToolStripRenderer r = dark ? (ToolStripRenderer)new DarkRenderer() : new ToolStripProfessionalRenderer();
         menu.Renderer = r;
         miColor.DropDown.Renderer = r;
+        miSkin.DropDown.Renderer = r;
         miRem.DropDown.Renderer = r;
         miAcc.DropDown.Renderer = r;
         miDo.DropDown.Renderer = r;
@@ -835,6 +868,8 @@ class PetForm : Form {
                 string k = line.Substring(0, eq).Trim(), v = line.Substring(eq + 1).Trim();
                 if (k == "color") baseColor = Color.FromArgb(255, Color.FromArgb(int.Parse(v, NumberStyles.HexNumber)));
                 else if (k == "arcoiris") rainbow = v == "1";
+                else if (k == "aspecto") skin = v;
+                else if (k == "variante") shiny = v != "normal";
                 else if (k == "bocadillos") bubblesOn = v != "0";
                 else if (k == "ventanas") winsOn = v != "0";
                 else if (k == "agua") oldWater = v == "1";        // antiguas opciones del menu: solo se usan
@@ -851,10 +886,99 @@ class PetForm : Form {
             File.WriteAllText(ConfigPath,
                 "color=" + (baseColor.ToArgb() & 0xFFFFFF).ToString("X6") + "\r\n" +
                 "arcoiris=" + (rainbow ? "1" : "0") + "\r\n" +
+                "aspecto=" + skin + "\r\n" +
+                "variante=" + (shiny ? "shiny" : "normal") + "\r\n" +
                 "bocadillos=" + (bubblesOn ? "1" : "0") + "\r\n" +
                 "ventanas=" + (winsOn ? "1" : "0") + "\r\n" +
                 "accesorio=" + AccKeys[accMode + 1] + "\r\n");
         } catch { }
+    }
+
+    // ---------- Aspecto ----------
+    void SetSkin(string s) { skin = s; ApplySkin(); SaveConfig(); }
+    void SetShiny(bool s) { shiny = s; ApplySkin(); SaveConfig(); }
+
+    void ApplySkin() {
+        if (skin == "clawitzer") {
+            Bitmap img = LoadSprite(shiny ? "clawitzer-shiny.png" : "clawitzer.png");
+            if (img != null) { if (petImg != null) petImg.Dispose(); petImg = img; sprPX = -1; }
+        }
+        useSprite = skin == "clawitzer" && petImg != null;
+        if (!useSprite) skin = "claudio";
+        miSkinClaudio.Checked = !useSprite;
+        miSkinClaw.Checked = useSprite;
+        // "Color": paleta para Claudio, Normal/Shiny para Clawitzer
+        foreach (ToolStripItem it in miColor.DropDownItems)
+            it.Visible = (it == miNormal || it == miShiny) ? useSprite : !useSprite;
+        miNormal.Checked = !shiny; miShiny.Checked = shiny;
+        BuildSprites();
+        Invalidate();
+    }
+
+    // Lee el PNG incrustado en el exe, lo recorta al contenido y deja la transparencia "dura"
+    // (la ventana usa un color clave, asi que no puede haber pixeles semitransparentes).
+    static Bitmap LoadSprite(string resource) {
+        try {
+            using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream(resource)) {
+                if (s == null) return null;
+                using (Bitmap src = new Bitmap(s)) {
+                    int x0 = src.Width, y0 = src.Height, x1 = -1, y1 = -1;
+                    for (int y = 0; y < src.Height; y++)
+                        for (int x = 0; x < src.Width; x++)
+                            if (src.GetPixel(x, y).A >= 128) {
+                                if (x < x0) x0 = x; if (x > x1) x1 = x;
+                                if (y < y0) y0 = y; if (y > y1) y1 = y;
+                            }
+                    if (x1 < 0) return null;
+                    Bitmap crop = new Bitmap(x1 - x0 + 1, y1 - y0 + 1, PixelFormat.Format32bppArgb);
+                    using (Graphics g = Graphics.FromImage(crop))
+                        g.DrawImage(src, new Rectangle(0, 0, crop.Width, crop.Height), x0, y0, crop.Width, crop.Height, GraphicsUnit.Pixel);
+                    HardAlpha(crop);
+                    return crop;
+                }
+            }
+        } catch { return null; }
+    }
+
+    static void HardAlpha(Bitmap b) {
+        for (int y = 0; y < b.Height; y++)
+            for (int x = 0; x < b.Width; x++) {
+                Color c = b.GetPixel(x, y);
+                if (c.A == 0 || c.A == 255) continue;
+                b.SetPixel(x, y, c.A >= 128 ? Color.FromArgb(255, c) : Color.FromArgb(0, 0, 0, 0));
+            }
+    }
+
+    // Escala el sprite al tamano actual: con enteros (nitido) cuando cabe, sin pasarse nunca de la caja logica
+    void BuildSprites() {
+        if (!useSprite || sprPX == PX) return;
+        double k = COLS * (double)PX / Math.Max(petImg.Width, petImg.Height);
+        if (k >= 1) k = Math.Floor(k);
+        int w = Math.Max(1, (int)Math.Round(petImg.Width * k)), h = Math.Max(1, (int)Math.Round(petImg.Height * k));
+        Bitmap b = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+        using (Graphics g = Graphics.FromImage(b)) {
+            g.InterpolationMode = k >= 1 ? InterpolationMode.NearestNeighbor : InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.DrawImage(petImg, new Rectangle(0, 0, w, h), 0, 0, petImg.Width, petImg.Height, GraphicsUnit.Pixel);
+        }
+        if (k < 1) HardAlpha(b);
+        Bitmap f = (Bitmap)b.Clone();
+        f.RotateFlip(RotateFlipType.RotateNoneFlipX);
+        if (spr != null) spr.Dispose();
+        if (sprFlip != null) sprFlip.Dispose();
+        spr = b; sprFlip = f; sprPX = PX;
+    }
+
+    // El sprite de Clawitzer mira a la izquierda: se voltea cuando camina hacia la derecha
+    // (segun el modo, "derecha" del sprite apunta a un sitio distinto de la pantalla).
+    bool Flip() {
+        if (Free) return dir > 0;
+        switch (mode) {
+            case Mode.WallR: return vdir < 0;
+            case Mode.WallL: return vdir > 0;
+            case Mode.Ceiling: return dir < 0;
+        }
+        return dir > 0;
     }
 
     // ---------- Traer Claude al frente ----------
@@ -962,7 +1086,8 @@ class PetForm : Form {
         float angle = CurAngle(); int hp = CurHop(); string legs = CurLegs(); int eyes = BlinkPhase();
         if (angle != lastAngle || hp != lastHop || !ReferenceEquals(legs, lastLegs) || eyes != lastEyes || PX != lastPX
             || mood != lastMood || lookX != lastLX || lookY != lastLY || AnimPhase() != lastAnim || Lying() != lastLying
-            || AnimKey() != lastAnimK || accNow != lastAcc || SqKey() != lastSq || ShiverOff() != lastShv || Surprised() != lastSurp)
+            || AnimKey() != lastAnimK || accNow != lastAcc || SqKey() != lastSq || ShiverOff() != lastShv || Surprised() != lastSurp
+            || (useSprite && Flip() != lastFlip))
             Invalidate();
     }
 
@@ -1185,6 +1310,19 @@ class PetForm : Form {
         int rows = lying ? Body.Length : Body.Length + 2;   // tumbada: sin patas
         // squash & stretch anclado en los pies
         scY = 1 - sq; scX = 1 + 0.55 * sq; anX = offX + 7 * PX; anY = offY + rows * PX;
+        if (useSprite) {
+            // Clawitzer: mismo anclaje en los pies y mismo squash & stretch; sin ojos/boca/accesorios de Claudio
+            bool flip = Flip(); lastFlip = flip;
+            BuildSprites();
+            Bitmap img = flip ? sprFlip : spr;
+            int bob = ReferenceEquals(legs, LegsB) ? Math.Max(1, PX / 3) : 0;   // "paso" al andar
+            int dw = (int)Math.Round(img.Width * scX), dh = (int)Math.Round(img.Height * scY);
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.DrawImage(img, new Rectangle((int)Math.Round(anX - dw / 2.0), (int)Math.Round(anY) - dh - bob, dw, dh));
+            DrawDecor(g, offX, offY, lying);
+            return;
+        }
         for (int y = 0; y < rows; y++) {
             string row = y < Body.Length ? Body[y] : legs;
             for (int x = 0; x < row.Length; x++) {
@@ -1236,7 +1374,7 @@ class PetForm : Form {
         double ratio = (double)newPX / PX;
         double ccx = Left + SZ / 2.0, ccy = Top + SZ / 2.0;
         PX = newPX;
-        W = Body[0].Length * newPX;
+        W = COLS * newPX;
         H = W;
         M = (int)Math.Ceiling(W * 0.34) + 2;
         SZ = W + 2 * M;
@@ -1989,7 +2127,7 @@ class PetForm : Form {
         Think();
 
         // arcoiris: cambia de tono cada 3 ticks (~11 veces/s, una vuelta completa cada ~11 s)
-        if (rainbow && tick % 3 == 0) { hue = (hue + 4) % 360; SetBodyColor(FromHue(hue)); }
+        if (rainbow && !useSprite && tick % 3 == 0) { hue = (hue + 4) % 360; SetBodyColor(FromHue(hue)); }
 
         // parpadeo
         if (blink > 0) blink--; else if (rand.Next(150) == 0) blink = 8;
