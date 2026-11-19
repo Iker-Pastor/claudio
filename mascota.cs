@@ -63,7 +63,7 @@ enum Mood { Normal, Feliz, Aburrida, Mareada, Dormida }
 class WinInfo { public IntPtr H; public Rectangle R; public bool Usable; }
 
 enum Acc { Ninguno, Navidad, Bruja, Fiesta, Gafas }
-enum Anim { None, Stretch, Yawn, Wave }
+enum Anim { None, Code, Yawn, Wave }
 
 // Particula (polvo = 0, estrellita = 1) en coordenadas de pantalla
 class Particle { public double X, Y, VX, VY; public int Life, Max, Kind, Size; }
@@ -392,7 +392,15 @@ class PetForm : Form {
     readonly SolidBrush bWhite = new SolidBrush(Color.FromArgb(245, 245, 245));
     readonly SolidBrush bPurple = new SolidBrush(Color.FromArgb(75, 45, 115));
     readonly SolidBrush bGold = new SolidBrush(Color.FromArgb(245, 200, 60));
-    readonly SolidBrush bPink = new SolidBrush(Color.FromArgb(230, 70, 150));
+    // portatil de la animacion "programar"
+    readonly SolidBrush bBezel = new SolidBrush(Color.FromArgb(62, 64, 72));
+    readonly SolidBrush bScreen = new SolidBrush(Color.FromArgb(24, 32, 52));
+    readonly SolidBrush bDeck = new SolidBrush(Color.FromArgb(125, 128, 138));
+    readonly SolidBrush bKey = new SolidBrush(Color.FromArgb(80, 82, 92));
+    readonly SolidBrush[] bCode = {
+        new SolidBrush(Color.FromArgb(140, 235, 170)), new SolidBrush(Color.FromArgb(120, 195, 255)),
+        new SolidBrush(Color.FromArgb(255, 175, 205)), new SolidBrush(Color.FromArgb(255, 230, 120)) };
+    readonly SolidBrush bPink =new SolidBrush(Color.FromArgb(230, 70, 150));
     readonly SolidBrush bBlue = new SolidBrush(Color.FromArgb(70, 150, 230));
     Acc lastAcc = Acc.Ninguno; int lastAnimK = -1;
 
@@ -476,7 +484,7 @@ class PetForm : Form {
         miDo = new ToolStripMenuItem("Hacer...");
         miDo.DropDownItems.Add("Saludar", null, delegate { DoAnim(Anim.Wave, 80); });
         miDo.DropDownItems.Add("Bostezar", null, delegate { DoAnim(Anim.Yawn, 70); });
-        miDo.DropDownItems.Add("Estirarse", null, delegate { DoAnim(Anim.Stretch, 60); });
+        miDo.DropDownItems.Add("Programar", null, delegate { DoAnim(Anim.Code, 360); });
         menu.Items.Add(miDo);
 
         miAcc = new ToolStripMenuItem("Accesorios");
@@ -597,6 +605,8 @@ class PetForm : Form {
             bubble.Dispose();
             if (fx != null) fx.Dispose();
             bRed.Dispose(); bWhite.Dispose(); bPurple.Dispose(); bGold.Dispose(); bPink.Dispose(); bBlue.Dispose();
+            bBezel.Dispose(); bScreen.Dispose(); bDeck.Dispose(); bKey.Dispose();
+            foreach (SolidBrush cb in bCode) cb.Dispose();
         }
         base.Dispose(disposing);
     }
@@ -797,7 +807,6 @@ class PetForm : Form {
         if (Free) return 0;
         double s = 0.2 * sqT / 6.0;
         if (hopV > 1 && hop > 0) s -= 0.10;
-        if (anim == Anim.Stretch && animLen > 0) s -= 0.14 * Math.Sin(Math.PI * animT / animLen);
         s += mood == Mood.Dormida ? 0.03 * Math.Sin(tick * 0.045) : 0.022 * Math.Sin(tick * 0.07);
         return Math.Max(-0.2, Math.Min(0.25, s));
     }
@@ -806,7 +815,7 @@ class PetForm : Form {
     // Cara segun el animo y la animacion en curso
     Mood FaceMood() {
         if (anim == Anim.Wave && (mood == Mood.Normal || mood == Mood.Aburrida)) return Mood.Feliz;
-        if ((anim == Anim.Yawn || anim == Anim.Stretch) && (mood == Mood.Normal || mood == Mood.Aburrida)) return Mood.Dormida;
+        if (anim == Anim.Yawn && (mood == Mood.Normal || mood == Mood.Aburrida)) return Mood.Dormida;
         return mood;
     }
     int AnimPhase() {
@@ -819,7 +828,7 @@ class PetForm : Form {
     }
     string CurLegs() {
         if (Free) return (tick & 2) == 0 ? LegsA : LegsB;   // patalea
-        if (!walking || paused) return LegsA;
+        if (!walking || paused || anim == Anim.Code) return LegsA;
         return frame == 0 ? LegsA : LegsB;
     }
 
@@ -836,7 +845,7 @@ class PetForm : Form {
     int AnimKey() {
         switch (anim) {
             case Anim.Wave: return 10 + (animT / 4) % 2;
-            case Anim.Stretch: return 20 + (animT / 6) % 2;
+            case Anim.Code: return 40 + animT / 3;      // teclas y lineas de codigo cambian cada 3 ticks
             case Anim.Yawn: return 30 + YawnStage();
         }
         return 0;
@@ -855,7 +864,7 @@ class PetForm : Form {
         Block(g, b, offX, offY, x0, y, x1 - x0 + 1, 1);
     }
 
-    // Estirarse (brazos arriba), bostezar (boca) y saludar (bracito a la derecha)
+    // Programar (portatil), bostezar (boca) y saludar (bracito a la derecha)
     void DrawAnim(Graphics g, int offX, int offY) {
         if (anim == Anim.None || (mood != Mood.Normal && mood != Mood.Aburrida)) return;
         switch (anim) {
@@ -864,11 +873,22 @@ class PetForm : Form {
                 if ((animT / 4) % 2 == 0) { Dot(g, offX, offY, 13, 1, bBody); Dot(g, offX, offY, 13, 0, bBody); }
                 else { Dot(g, offX, offY, 15, 1, bBody); Dot(g, offX, offY, 15, 0, bBody); }
                 break;
-            case Anim.Stretch: {
-                int top = (animT / 6) % 2 == 0 ? 0 : 1;
-                for (int r = top; r <= 3; r++) { Dot(g, offX, offY, -1, r, bBody); Dot(g, offX, offY, 14, r, bBody); }
+            case Anim.Code:   // portatil delante (tapa las patas): pantalla con codigo que cambia y manitas tecleando
+                Row(g, offX, offY, 2, 11, 5, bBezel);
+                for (int y = 6; y <= 7; y++) {
+                    Dot(g, offX, offY, 2, y, bBezel); Dot(g, offX, offY, 11, y, bBezel);
+                    for (int x = 3; x <= 10; x++) {
+                        int sx = x + animT / 5;
+                        int v = (sx * 5 + y * 11 + (y + 3) * (sx >> 1)) % 9;
+                        Dot(g, offX, offY, x, y, v < 3 ? bScreen : bCode[(v - 3) % 4]);
+                    }
+                }
+                Row(g, offX, offY, 1, 12, 8, bDeck);
+                for (int x = 2; x <= 11; x += 2) Dot(g, offX, offY, x, 8, bKey);
+                bool leftDown = ((animT / 3) & 1) == 0, rightDown = (((animT / 3) + (animT / 9)) & 1) == 1;
+                if (leftDown) Row(g, offX, offY, 3, 4, 8, bBody);
+                if (rightDown) Row(g, offX, offY, 9, 10, 8, bBody);
                 break;
-            }
             case Anim.Yawn:
                 if (YawnStage() == 0) Row(g, offX, offY, 6, 7, 5, bBlack);
                 else { Row(g, offX, offY, 5, 8, 4, bBlack); Row(g, offX, offY, 5, 8, 5, bBlack); Row(g, offX, offY, 6, 7, 6, bBlack); }
@@ -931,26 +951,10 @@ class PetForm : Form {
         Block(g, b, offX, offY, sx, sy, 1, 1);
     }
 
-    // Mejillas sonrosadas: mezcla del color del cuerpo con rosa (mas intensas si esta feliz)
-    void DrawCheeks(Graphics g, int offX, int offY) {
-        Color b = bBody.Color;
-        double t = (mood == Mood.Feliz || anim == Anim.Wave) ? 0.9 : 0.55;
-        Color c = Color.FromArgb(b.R + (int)((255 - b.R) * t), b.G + (int)((105 - b.G) * t), b.B + (int)((150 - b.B) * t));
-        using (SolidBrush cb = new SolidBrush(c)) { Row(g, offX, offY, 2, 3, 4, cb); Row(g, offX, offY, 10, 11, 4, cb); }
-    }
-
-    // Boquita segun el animo: sonrisa, sonrisa abierta (feliz), "o" (sorpresa), ondulada (mareada), recta (aburrida)
+    // La boca solo aparece en acciones: "o" al agarrarla/lanzarla y sonrisa abierta al saludar (el bostezo la dibuja en DrawAnim)
     void DrawMouth(Graphics g, int offX, int offY) {
-        if (anim == Anim.Yawn || mood == Mood.Dormida) return;
         if (Surprised()) { Row(g, offX, offY, 6, 7, 4, bBlack); Row(g, offX, offY, 6, 7, 5, bBlack); return; }
-        switch (FaceMood()) {
-            case Mood.Feliz: Row(g, offX, offY, 5, 8, 4, bBlack); Row(g, offX, offY, 6, 7, 5, bBlack); break;
-            case Mood.Mareada:
-                Dot(g, offX, offY, 5, 5, bBlack); Dot(g, offX, offY, 6, 4, bBlack); Dot(g, offX, offY, 7, 5, bBlack); Dot(g, offX, offY, 8, 4, bBlack);
-                break;
-            case Mood.Aburrida: Row(g, offX, offY, 6, 7, 5, bBlack); break;
-            default: Dot(g, offX, offY, 5, 4, bBlack); Dot(g, offX, offY, 8, 4, bBlack); Row(g, offX, offY, 6, 7, 5, bBlack); break;
-        }
+        if (anim == Anim.Wave && FaceMood() == Mood.Feliz) { Row(g, offX, offY, 5, 8, 4, bBlack); Row(g, offX, offY, 6, 7, 5, bBlack); }
     }
 
     // Ojos segun el animo. Columnas de los ojos: 4 y 9; filas 2-3 (coordenadas del sprite).
@@ -1047,7 +1051,6 @@ class PetForm : Form {
                 Block(g, bBody, offX, offY, x, y, 1, 1);
             }
         }
-        DrawCheeks(g, offX, offY);
         DrawEyes(g, offX, offY, eyes);
         DrawMouth(g, offX, offY);
         DrawAnim(g, offX, offY);
@@ -1590,6 +1593,7 @@ class PetForm : Form {
     }
 
 
+
     // Desde el menu "Hacer...": si esta dormida, solo la despierta (que ya saluda)
     void DoAnim(Anim a, int len) {
         if (mood == Mood.Dormida) { Wake(); return; }
@@ -1655,6 +1659,7 @@ class PetForm : Form {
     // Pupilas: 1 pixel de sprite hacia el cursor (en coordenadas del sprite, deshaciendo la rotacion)
     void UpdateLook() {
         if (mood != Mood.Normal && mood != Mood.Aburrida) { lookX = 0; lookY = 0; return; }
+        if (anim == Anim.Code) { lookX = 0; lookY = 1; return; }   // mira a la pantalla
         Point c = Cursor.Position;
         double dx = c.X - (Left + SZ / 2.0), dy = c.Y - (Top + SZ / 2.0);
         double a = -CurAngle() * Math.PI / 180.0;
@@ -1680,7 +1685,7 @@ class PetForm : Form {
         if (tick % 3 == 0) UpdateLook();
         int now = Environment.TickCount;
 
-        // animaciones (estirarse / bostezar / saludar)
+        // animaciones (programar / bostezar / saludar)
         if (anim != Anim.None) {
             if (dragging || mode != Mode.Floor || mood == Mood.Dormida || mood == Mood.Mareada) { anim = Anim.None; pendingSleep = false; }
             else if (++animT >= animLen) {
@@ -1688,11 +1693,11 @@ class PetForm : Form {
                 if (pendingSleep) { pendingSleep = false; StartSleep(); }
             }
         } else if (mode == Mode.Floor && !dragging && vy == 0 && chaseTicks <= 0 && (mood == Mood.Normal || mood == Mood.Aburrida)) {
-            // bostezo o estiron espontaneo cada ~3-5 min (para un momento lo que estuviera haciendo);
+            // bostezo o "programar" espontaneo cada ~3-5 min (para un momento lo que estuviera haciendo);
             // aburrida bosteza mucho mas a menudo
             if (mood == Mood.Aburrida && tick % 33 == 17 && rand.Next(10) == 0) StartAnim(Anim.Yawn, 70);
             else if (--nextIdleAnim <= 0) {
-                StartAnim(rand.Next(2) == 0 ? Anim.Yawn : Anim.Stretch, 70);
+                if (rand.Next(2) == 0) StartAnim(Anim.Yawn, 70); else StartAnim(Anim.Code, 300 + rand.Next(150));   // programar: ~9-14 s
                 nextIdleAnim = anim != Anim.None ? 5940 + rand.Next(3960) : 66;   // si no pudo, reintenta en ~2 s
             }
         }
