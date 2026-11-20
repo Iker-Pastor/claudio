@@ -1283,17 +1283,26 @@ class PetForm : Form {
         if (Free) return (float)(phi * 180.0 / Math.PI);
         if (!useSprite) return ModeAngle();
         // Pokemon: se contonea al andar y se balancea al saludar
-        return ModeAngle() + WaddleAngle(walking, paused, mode == Mode.Floor, frame) + (anim == Anim.Wave ? WaveTilt(animT) : 0);
+        bool moving = WaddleMoving(walking, paused, anim, mood == Mood.Dormida, vy);
+        return ModeAngle() + WaddleAngle(moving, mode == Mode.Floor, frame) + (anim == Anim.Wave ? WaveTilt(animT) : 0);
     }
 
     // ---------- Vida de los Pokemon (funciones puras, ver tests\MascotaTests.cs) ----------
     // "Programar" no tiene sentido sin portatil: un Pokemon mira alrededor
     internal static Anim SpriteAnim(Anim a) { return a == Anim.Code ? Anim.Look : a; }
     // Contoneo al andar por el suelo: se inclina a un lado y al otro con cada paso
-    internal static float WaddleAngle(bool walking, bool paused, bool onFloor, int frame) {
-        if (!walking || paused || !onFloor) return 0;
+    internal static float WaddleAngle(bool moving, bool onFloor, int frame) {
+        if (!moving || !onFloor) return 0;
         return frame == 0 ? -4f : 4f;
     }
+    // Solo se contonea si de verdad esta dando pasos (mismas condiciones que avanzan "frame")
+    internal static bool WaddleMoving(bool walking, bool paused, Anim anim, bool asleep, double vy) {
+        return walking && !paused && anim == Anim.None && !asleep && vy == 0;
+    }
+    // Cuanto bajar el gorro para que su punta no se salga por arriba de la ventana
+    internal static int HatDrop(double hatTop) { return hatTop < 0 ? (int)Math.Ceiling(-hatTop) : 0; }
+    // Angulo que decide si el bocadillo sigue al cuerpo o a la caja: la inclinacion de los Pokemon no cuenta
+    internal static float BubbleAngle(bool free, float freeAngle, float modeAngle) { return free ? freeAngle : modeAngle; }
     // Balanceo al saludar (grados enteros para no repintar cada tick)
     internal static float WaveTilt(int animT) { return (float)Math.Round(6 * Math.Sin(animT * 0.35)); }
     // Bostezo: se estira hacia arriba y al final suelta el aire achatandose un poco
@@ -1542,6 +1551,9 @@ class PetForm : Form {
         int hx = flip ? spr.Width - sprHead.Right : sprHead.X;
         double cx = dst.X + (hx + sprHead.Width / 2.0) * scX;
         double topY = dst.Y + sprHead.Y * scY + ch;
+        int minRow = 0;
+        foreach (int[] r in shape) if (r[2] < minRow) minRow = r[2];
+        topY += HatDrop(topY + minRow * ch);   // Pokemon altos (o en pleno salto): se encaja mas en vez de cortarse
         foreach (int[] r in shape) {
             int a = HatCol(r[0], flip), b = HatCol(r[1], flip);
             if (a > b) { int t = a; a = b; b = t; }
@@ -2290,7 +2302,7 @@ class PetForm : Form {
     void UpdateBubble() {
         if (bubbleTicks <= 0) return;
         Rectangle r;
-        if (CurAngle() != 0) r = new Rectangle(Left + M, Top + M, W, H);
+        if (BubbleAngle(Free, CurAngle(), ModeAngle()) != 0) r = new Rectangle(Left + M, Top + M, W, H);
         else {
             bool ly = Lying();
             int top = Top + M + H - (Body.Length + 2) * PX - CurHop() + (ly ? 2 * PX : 0);

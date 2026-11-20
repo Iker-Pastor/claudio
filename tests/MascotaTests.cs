@@ -26,11 +26,23 @@ static class MascotaTests {
         // Task 1: vida de los Pokemon
         Eq(Anim.Look, PetForm.SpriteAnim(Anim.Code), "SpriteAnim_CodeEsLook");
         Eq(Anim.Wave, PetForm.SpriteAnim(Anim.Wave), "SpriteAnim_WaveIgual");
-        Eq(0f, PetForm.WaddleAngle(false, false, true, 1), "Waddle_Parado");
-        Eq(0f, PetForm.WaddleAngle(true, false, false, 1), "Waddle_Pared");
-        Eq(0f, PetForm.WaddleAngle(true, true, true, 1), "Waddle_Pausa");
-        Eq(-4f, PetForm.WaddleAngle(true, false, true, 0), "Waddle_Paso0");
-        Eq(4f, PetForm.WaddleAngle(true, false, true, 1), "Waddle_Paso1");
+        Eq(0f, PetForm.WaddleAngle(false, true, 1), "Waddle_Parado");
+        Eq(0f, PetForm.WaddleAngle(true, false, 1), "Waddle_Pared");
+        Eq(-4f, PetForm.WaddleAngle(true, true, 0), "Waddle_Paso0");
+        Eq(4f, PetForm.WaddleAngle(true, true, 1), "Waddle_Paso1");
+        // Revision final: no se queda inclinada al parar para una animacion, dormir o caer
+        Eq(false, PetForm.WaddleMoving(true, false, Anim.Yawn, false, 0), "Waddle_Animacion");
+        Eq(false, PetForm.WaddleMoving(true, false, Anim.None, true, 0), "Waddle_Dormida");
+        Eq(false, PetForm.WaddleMoving(true, false, Anim.None, false, 3), "Waddle_Cayendo");
+        Eq(false, PetForm.WaddleMoving(true, true, Anim.None, false, 0), "Waddle_Pausa");
+        Eq(true, PetForm.WaddleMoving(true, false, Anim.None, false, 0), "Waddle_Andando");
+        // Revision final: el gorro no se sale por arriba de la ventana
+        Eq(8, PetForm.HatDrop(-7.2), "HatDrop_Fuera");
+        Eq(0, PetForm.HatDrop(3), "HatDrop_Dentro");
+        // Revision final: el bocadillo no salta con el contoneo (usa el angulo del modo, no la inclinacion)
+        Eq(0f, PetForm.BubbleAngle(false, 30f, 0f), "Bubble_SueloIgnoraInclinacion");
+        Eq(30f, PetForm.BubbleAngle(true, 30f, 0f), "Bubble_AireUsaGiro");
+        Eq(90f, PetForm.BubbleAngle(false, 94f, 90f), "Bubble_Pared");
         Eq(0f, PetForm.WaveTilt(0), "WaveTilt_Inicio");
         Eq(-0.15, PetForm.YawnSquash(30, 70), "Yawn_Estira");
         Eq(true, PetForm.YawnSquash(55, 70) > 0, "Yawn_Suelta");
