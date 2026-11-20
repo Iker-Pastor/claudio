@@ -1292,7 +1292,7 @@ class PetForm : Form {
     internal static Anim SpriteAnim(Anim a) { return a == Anim.Code ? Anim.Look : a; }
     // Contoneo al andar por el suelo: se inclina a un lado y al otro con cada paso
     // Andar a saltitos de lado a lado: un saltito cada WALK_HOP ticks, inclinandose a un lado y al otro
-    const int WALK_HOP = 6;
+    const int WALK_HOP = 12;   // ~0,36 s por saltito
     internal static float WaddleAngle(bool moving, bool onFloor, int t) {
         if (!moving || !onFloor) return 0;
         return (t / WALK_HOP) % 2 == 0 ? -5f : 5f;
