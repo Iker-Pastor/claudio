@@ -198,7 +198,7 @@ class Reminder {
 class WinInfo { public IntPtr H; public Rectangle R; public bool Usable; }
 
 enum Acc { Ninguno, Navidad, Bruja, Fiesta, Gafas }
-enum Anim { None, Code, Yawn, Wave }
+enum Anim { None, Code, Yawn, Wave, Look }   // Look: solo Pokemon (mira a un lado y al otro)
 
 // Particula (polvo = 0, estrellita = 1) en coordenadas de pantalla
 class Particle { public double X, Y, VX, VY; public int Life, Max, Kind, Size; }
@@ -468,6 +468,7 @@ class PetForm : Form {
     bool shiny = true;                    // variante: shiny o normal
     Bitmap petImg;                        // sprite original, recortado al contenido
     Bitmap spr, sprFlip; int sprPX = -1;  // sprite ya escalado al tamano actual (normal y volteado)
+    Rectangle sprHead;                    // cabeza del sprite (coordenadas de spr); vacia = no lleva gorro
     bool lastFlip;
     readonly ToolStripMenuItem miSkin, miSkinClaudio, miSkinOg, miSkinPick, miNormal, miShiny, miShow;
     // Pokemon usados recientemente (id + nombre), el mas reciente primero; se guardan en config.txt
@@ -548,7 +549,7 @@ class PetForm : Form {
     int accMode = -1;                                 // -1 = automatico (por fecha); si no, el valor de Acc
     Acc accNow = Acc.Ninguno;
     readonly ToolStripMenuItem[] miAccItems = new ToolStripMenuItem[6];
-    ToolStripMenuItem miAcc, miDo;
+    ToolStripMenuItem miAcc, miDo, miDoCode;
     readonly SolidBrush bRed = new SolidBrush(Color.FromArgb(205, 40, 50));
     readonly SolidBrush bWhite = new SolidBrush(Color.FromArgb(245, 245, 245));
     readonly SolidBrush bPurple = new SolidBrush(Color.FromArgb(75, 45, 115));
@@ -612,7 +613,7 @@ class PetForm : Form {
         miRainbow = new ToolStripMenuItem("Arcoíris", RainbowSwatch());
         miRainbow.Click += delegate { rainbow = true; UpdateColorChecks(); SaveConfig(); };
         miColor.DropDownItems.Add(miRainbow);
-        // Con Clawitzer, "Color" ofrece sus dos variantes en vez de la paleta
+        // Con un Pokemon, "Color" ofrece sus dos variantes en vez de la paleta
         miNormal = new ToolStripMenuItem("Normal");
         miNormal.Click += delegate { SetShiny(false); };
         miShiny = new ToolStripMenuItem("Shiny");
@@ -668,7 +669,7 @@ class PetForm : Form {
         miDo = new ToolStripMenuItem("Hacer...");
         miDo.DropDownItems.Add("Saludar", null, delegate { DoAnim(Anim.Wave, 80); });
         miDo.DropDownItems.Add("Bostezar", null, delegate { DoAnim(Anim.Yawn, 70); });
-        miDo.DropDownItems.Add("Programar", null, delegate { DoAnim(Anim.Code, 360); });
+        miDoCode = (ToolStripMenuItem)miDo.DropDownItems.Add("Programar", null, delegate { DoAnim(Anim.Code, 360); });
         menu.Items.Add(miDo);
 
         miAcc = new ToolStripMenuItem("Accesorios");
@@ -950,11 +951,13 @@ class PetForm : Form {
         if (!useSprite && skin == "pokemon") skin = "claudio";
         if (useSprite || recents.Count == 0) AddRecent(pokeId, pokeName);   // Pokemon por defecto si aun no hay ninguno
         RebuildSkinMenu();
-        // Las animaciones y accesorios son solo del Claudio actual: con un Pokemon o el OG se ocultan del menu
-        miDo.Visible = skin == "claudio";
-        miAcc.Visible = skin == "claudio";
+        // Claudio OG no tiene animaciones ni accesorios; los Pokemon si (sin programar ni gafas)
+        miDo.Visible = skin != "og";        // los Pokemon tambien saludan y bostezan...
+        miDoCode.Visible = !useSprite;      // ...pero no programan
+        miAcc.Visible = skin != "og";       // Claudio OG sigue sin accesorios
+        miAccItems[5].Visible = !useSprite; // "Gafas de sol": los Pokemon no
         UpdateTrayIcon();
-        // "Color": paleta para Claudio, Normal/Shiny para Clawitzer
+        // "Color": paleta para Claudio, Normal/Shiny para los Pokemon
         foreach (ToolStripItem it in miColor.DropDownItems)
             it.Visible = (it == miNormal || it == miShiny) ? useSprite : !useSprite;
         miNormal.Checked = !shiny; miShiny.Checked = shiny;
@@ -1209,11 +1212,17 @@ class PetForm : Form {
         if (spr != null) spr.Dispose();
         if (sprFlip != null) sprFlip.Dispose();
         spr = b; sprFlip = f; sprPX = PX;
+        sprHead = HeadBox(spr);
+        if (!HatFits(spr, sprHead)) sprHead = Rectangle.Empty;   // orejas o cuernos arriba: sin gorro
     }
 
-    // El sprite de Clawitzer mira a la izquierda: se voltea cuando camina hacia la derecha
+    // Los sprites de Pokemon miran a la izquierda: se voltea cuando camina hacia la derecha
     // (segun el modo, "derecha" del sprite apunta a un sitio distinto de la pantalla).
     bool Flip() {
+        bool f = BaseFlip();
+        return (useSprite && anim == Anim.Look && LookFlipped(animT, animLen)) ? !f : f;   // mirar alrededor
+    }
+    bool BaseFlip() {
         if (Free) return dir > 0;
         switch (mode) {
             case Mode.WallR: return vdir < 0;
@@ -1270,12 +1279,61 @@ class PetForm : Form {
 
     // ---------- Dibujo ----------
     bool Free { get { return dragging || mode == Mode.Air; } }
-    float CurAngle() { return Free ? (float)(phi * 180.0 / Math.PI) : ModeAngle(); }
+    float CurAngle() {
+        if (Free) return (float)(phi * 180.0 / Math.PI);
+        if (!useSprite) return ModeAngle();
+        // Pokemon: se contonea al andar y se balancea al saludar
+        bool moving = WaddleMoving(walking, paused, anim, mood == Mood.Dormida, vy);
+        return ModeAngle() + WaddleAngle(moving, mode == Mode.Floor, tick) + (anim == Anim.Wave ? WaveTilt(animT) : 0);
+    }
+
+    // ---------- Vida de los Pokemon (funciones puras, ver tests\MascotaTests.cs) ----------
+    // "Programar" no tiene sentido sin portatil: un Pokemon mira alrededor
+    internal static Anim SpriteAnim(Anim a) { return a == Anim.Code ? Anim.Look : a; }
+    // Contoneo al andar por el suelo: se inclina a un lado y al otro con cada paso
+    // Andar a saltitos de lado a lado: un saltito cada WALK_HOP ticks, inclinandose a un lado y al otro
+    const int WALK_HOP = 12;   // ~0,36 s por saltito
+    internal static float WaddleAngle(bool moving, bool onFloor, int t) {
+        if (!moving || !onFloor) return 0;
+        return (t / WALK_HOP) % 2 == 0 ? -5f : 5f;
+    }
+    // Altura del saltito (arco) en el tick t; px = altura maxima
+    internal static int WalkHopPx(int t, int px) {
+        return (int)Math.Round(px * Math.Sin(Math.PI * (t % WALK_HOP) / WALK_HOP));
+    }
+    // Solo se contonea si de verdad esta dando pasos (mismas condiciones que avanzan "frame")
+    internal static bool WaddleMoving(bool walking, bool paused, Anim anim, bool asleep, double vy) {
+        return walking && !paused && anim == Anim.None && !asleep && vy == 0;
+    }
+    // Cuanto bajar el gorro para que su punta no se salga por arriba de la ventana
+    internal static int HatDrop(double hatTop) { return hatTop < 0 ? (int)Math.Ceiling(-hatTop) : 0; }
+    // Angulo que decide si el bocadillo sigue al cuerpo o a la caja: la inclinacion de los Pokemon no cuenta
+    internal static float BubbleAngle(bool free, float freeAngle, float modeAngle) { return free ? freeAngle : modeAngle; }
+    // Balanceo al saludar (grados enteros para no repintar cada tick)
+    internal static float WaveTilt(int animT) { return (float)Math.Round(6 * Math.Sin(animT * 0.35)); }
+    // Bostezo: se estira hacia arriba y al final suelta el aire achatandose un poco
+    internal static double YawnSquash(int animT, int animLen) {
+        int end = animLen - 20;
+        if (animT >= animLen) return 0;
+        if (animT < 10) return -0.15 * animT / 10.0;
+        if (animT < end) return -0.15;
+        return 0.10 * (animLen - animT) / 20.0;
+    }
+    // Mirar alrededor: el tercio central mira hacia el otro lado
+    internal static bool LookFlipped(int animT, int animLen) { return animT >= animLen / 3 && animT < 2 * animLen / 3; }
+    // Saludo de Pokemon: dos saltitos
+    internal static bool WaveHopAt(int animT) { return animT == 2 || animT == 26; }
     // Tumbada durmiendo en el suelo (sin patas, el cuerpo apoyado)
     bool Lying() { return mood == Mood.Dormida && mode == Mode.Floor && !dragging && vy == 0; }
     // Rebotito al andar (1 px o poco mas, en el paso con patas B)
     int Bob() { return (walking && !paused && anim == Anim.None && mood != Mood.Dormida && mode == Mode.Floor && !Free && frame == 1) ? Math.Max(1, PX / 5) : 0; }
-    int CurHop() { return (Free || Lying()) ? 0 : (int)Math.Round(hop) + Bob(); }
+    int CurHop() {
+        if (Free || Lying()) return 0;
+        // Pokemon: anda a saltitos en vez del rebotito de Claudio
+        if (useSprite && mode == Mode.Floor && WaddleMoving(walking, paused, anim, mood == Mood.Dormida, vy))
+            return (int)Math.Round(hop) + WalkHopPx(tick, PX);
+        return (int)Math.Round(hop) + Bob();
+    }
 
     // Parpadeo en 3 fases: 0 = abiertos, 1 = entornados, 2 = cerrados
     int BlinkPhase() {
@@ -1294,7 +1352,8 @@ class PetForm : Form {
         if (Free) return 0;
         double s = 0.2 * sqT / 6.0;
         if (hopV > 1 && hop > 0) s -= 0.10;
-        if (anim == Anim.Code && animLen > 0) {   // se agacha hacia el portatil mientras teclea
+        if (useSprite && anim == Anim.Yawn) s += YawnSquash(animT, animLen);
+        if (!useSprite && anim == Anim.Code && animLen > 0) {   // se agacha hacia el portatil mientras teclea
             int u = Math.Min(animT, animLen - animT);
             s += 0.22 * Math.Min(1.0, Math.Max(0.0, (u - 14) / 14.0));
         }
@@ -1339,6 +1398,7 @@ class PetForm : Form {
             case Anim.Wave: return 10 + (animT / 4) % 2;
             case Anim.Code: return 40 + animT / 3;      // teclas y lineas de codigo cambian cada 3 ticks
             case Anim.Yawn: return 30 + YawnStage();
+            case Anim.Look: return 50 + (LookFlipped(animT, animLen) ? 1 : 0);
         }
         return 0;
     }
@@ -1405,7 +1465,7 @@ class PetForm : Form {
     }
 
     // ---------- Accesorios por fecha ----------
-    static Acc AutoAcc(DateTime d) {
+    internal static Acc AutoAcc(DateTime d) {
         int m = d.Month, day = d.Day;
         if ((m == 12 && day == 31) || (m == 1 && day == 1)) return Acc.Fiesta;   // prioridad
         if (m == 12 || (m == 1 && day <= 6)) return Acc.Navidad;
@@ -1420,32 +1480,107 @@ class PetForm : Form {
         for (int i = 0; i < miAccItems.Length; i++) miAccItems[i].Checked = (i == accMode + 1);
     }
 
+    // Gorros como datos: {x0, x1, fila, color} en columnas 0-13 del cuerpo de Claudio (fila -1 = justo encima de la cabeza).
+    // Colores: 0 blanco, 1 rojo, 2 morado, 3 dorado, 4 rosa, 5 azul. Los comparten Claudio y los Pokemon.
+    static readonly int[][] HatNavidad = {
+        new[] { 2, 11, -1, 0 }, new[] { 3, 10, -2, 1 }, new[] { 4, 9, -3, 1 },
+        new[] { 5, 9, -4, 1 }, new[] { 7, 9, -5, 1 }, new[] { 10, 11, -5, 0 } };
+    static readonly int[][] HatBruja = {
+        new[] { 0, 13, -1, 2 }, new[] { 4, 9, -2, 2 }, new[] { 6, 7, -2, 3 }, new[] { 5, 8, -3, 2 },
+        new[] { 6, 8, -4, 2 }, new[] { 7, 8, -5, 2 }, new[] { 8, 9, -6, 2 } };
+    static readonly int[][] HatFiesta = {
+        new[] { 4, 9, -1, 4 }, new[] { 5, 8, -2, 5 }, new[] { 6, 7, -3, 4 }, new[] { 6, 7, -4, 3 } };
+
+    internal static int[][] HatShape(Acc a) {
+        switch (a) {
+            case Acc.Navidad: return HatNavidad;
+            case Acc.Bruja: return HatBruja;
+            case Acc.Fiesta: return HatFiesta;
+        }
+        return null;   // Ninguno y Gafas no son gorros
+    }
+
+    Brush HatBrush(int c) {
+        switch (c) {
+            case 0: return bWhite;
+            case 1: return bRed;
+            case 2: return bPurple;
+            case 3: return bGold;
+            case 4: return bPink;
+        }
+        return bBlue;
+    }
+
+    // Un Pokemon no lleva gafas: no se sabe donde tiene los ojos
+    internal static Acc SpriteAcc(Acc a) { return a == Acc.Gafas ? Acc.Ninguno : a; }
+
+    // "Cabeza" del sprite: franja superior (al menos 1/6 del alto) y su ancho opaco
+    internal static Rectangle HeadBox(Bitmap b) {
+        int top = -1;
+        for (int y = 0; y < b.Height && top < 0; y++)
+            for (int x = 0; x < b.Width; x++)
+                if (b.GetPixel(x, y).A >= 128) { top = y; break; }
+        if (top < 0) return Rectangle.Empty;
+        int band = Math.Min(Math.Max(2, b.Height / 6), b.Height - top);
+        int x0 = b.Width, x1 = -1;
+        for (int y = top; y < top + band; y++)
+            for (int x = 0; x < b.Width; x++)
+                if (b.GetPixel(x, y).A >= 128) { if (x < x0) x0 = x; if (x > x1) x1 = x; }
+        return new Rectangle(x0, top, x1 - x0 + 1, band);
+    }
+
+    // Tamano de celda del gorro segun el ancho de la cabeza (entre PX/2 y PX)
+    internal static int HatCell(int headWidthPx, int px) {
+        return Math.Max(Math.Max(2, px / 2), Math.Min(px, (int)Math.Round(headWidthPx / 10.0)));
+    }
+
+    internal static int HatCol(int col, bool flip) { return flip ? 13 - col : col; }
+
+    // Si lo alto del sprite son orejas, cuernos o pinzas, no se pone gorro. Se detecta como "salientes finos":
+    // desde lo alto se tarda mas de 1/8 del alto en llegar a una fila maciza (un tramo opaco >= 30% del ancho).
+    // Calibrado con Pikachu, Eevee, Umbreon y Clawitzer (sin gorro) y Jigglypuff, Snorlax, Bulbasaur (con gorro).
+    internal static bool HatFits(Bitmap b, Rectangle head) {
+        if (head.IsEmpty) return false;
+        int minRun = (int)Math.Ceiling(0.3 * b.Width);
+        for (int y = head.Y; y < b.Height; y++) {
+            int run = 0, best = 0;
+            for (int x = 0; x < b.Width; x++) {
+                if (b.GetPixel(x, y).A >= 128) { run++; if (run > best) best = run; }
+                else run = 0;
+            }
+            if (best >= minRun) return y - head.Y <= b.Height / 8;
+        }
+        return false;
+    }
+
+    // Gorro sobre un Pokemon: centrado en su cabeza, con el ala encajada una celda y espejado si mira al otro lado.
+    // dst = rectangulo donde se ha dibujado el sprite (ya con squash y saltito), asi el gorro lo sigue.
+    void DrawHat(Graphics g, Rectangle dst, bool flip) {
+        int[][] shape = HatShape(SpriteAcc(accNow));
+        if (shape == null || sprHead.IsEmpty) return;
+        int cell = HatCell(sprHead.Width, PX);
+        double cw = cell * scX, ch = cell * scY;
+        int hx = flip ? spr.Width - sprHead.Right : sprHead.X;
+        double cx = dst.X + (hx + sprHead.Width / 2.0) * scX;
+        double topY = dst.Y + sprHead.Y * scY + ch;
+        int minRow = 0;
+        foreach (int[] r in shape) if (r[2] < minRow) minRow = r[2];
+        topY += HatDrop(topY + minRow * ch);   // Pokemon altos (o en pleno salto): se encaja mas en vez de cortarse
+        foreach (int[] r in shape) {
+            int a = HatCol(r[0], flip), b = HatCol(r[1], flip);
+            if (a > b) { int t = a; a = b; b = t; }
+            int xa = (int)Math.Round(cx + (a - 7) * cw), xb = (int)Math.Round(cx + (b - 6) * cw);
+            int ya = (int)Math.Round(topY + r[2] * ch), yb = (int)Math.Round(topY + (r[2] + 1) * ch);
+            g.FillRectangle(HatBrush(r[3]), xa, ya, xb - xa, yb - ya);
+        }
+    }
+
     // Se dibujan en coordenadas del sprite (fila 0 = tope de la cabeza), asi giran y escalan con ella
     void DrawAcc(Graphics g, int offX, int offY) {
+        int[][] hat = HatShape(accNow);
+        if (hat != null)
+            foreach (int[] r in hat) Row(g, offX, offY, r[0], r[1], r[2], HatBrush(r[3]));
         switch (accNow) {
-            case Acc.Navidad:
-                Row(g, offX, offY, 2, 11, -1, bWhite);
-                Row(g, offX, offY, 3, 10, -2, bRed);
-                Row(g, offX, offY, 4, 9, -3, bRed);
-                Row(g, offX, offY, 5, 9, -4, bRed);
-                Row(g, offX, offY, 7, 9, -5, bRed);
-                Row(g, offX, offY, 10, 11, -5, bWhite);
-                break;
-            case Acc.Bruja:
-                Row(g, offX, offY, 0, 13, -1, bPurple);
-                Row(g, offX, offY, 4, 9, -2, bPurple);
-                Row(g, offX, offY, 6, 7, -2, bGold);
-                Row(g, offX, offY, 5, 8, -3, bPurple);
-                Row(g, offX, offY, 6, 8, -4, bPurple);
-                Row(g, offX, offY, 7, 8, -5, bPurple);
-                Row(g, offX, offY, 8, 9, -6, bPurple);
-                break;
-            case Acc.Fiesta:
-                Row(g, offX, offY, 4, 9, -1, bPink);
-                Row(g, offX, offY, 5, 8, -2, bBlue);
-                Row(g, offX, offY, 6, 7, -3, bPink);
-                Row(g, offX, offY, 6, 7, -4, bGold);
-                break;
             case Acc.Gafas:
                 Row(g, offX, offY, 2, 5, 2, bBlack); Row(g, offX, offY, 2, 5, 3, bBlack); Row(g, offX, offY, 2, 5, 4, bBlack);
                 Row(g, offX, offY, 8, 11, 2, bBlack); Row(g, offX, offY, 8, 11, 3, bBlack); Row(g, offX, offY, 8, 11, 4, bBlack);
@@ -1553,15 +1688,17 @@ class PetForm : Form {
         // squash & stretch anclado en los pies
         scY = 1 - sq; scX = 1 + 0.55 * sq; anX = offX + 7 * PX; anY = offY + rows * PX;
         if (useSprite) {
-            // Clawitzer: mismo anclaje en los pies y mismo squash & stretch; sin ojos/boca/accesorios de Claudio
+            // Pokemon: mismo anclaje en los pies y mismo squash & stretch; sin ojos/boca de Claudio, con su gorro si le cabe
             bool flip = Flip(); lastFlip = flip;
             BuildSprites();
             Bitmap img = flip ? sprFlip : spr;
-            int bob = ReferenceEquals(legs, LegsB) ? Math.Max(1, PX / 3) : 0;   // "paso" al andar
+            int bob = 0;   // el "paso" ya lo dan los saltitos (CurHop)
             int dw = (int)Math.Round(img.Width * scX), dh = (int)Math.Round(img.Height * scY);
             g.InterpolationMode = InterpolationMode.NearestNeighbor;
             g.PixelOffsetMode = PixelOffsetMode.Half;
-            g.DrawImage(img, new Rectangle((int)Math.Round(anX - dw / 2.0), (int)Math.Round(anY) - dh - bob, dw, dh));
+            Rectangle dst = new Rectangle((int)Math.Round(anX - dw / 2.0), (int)Math.Round(anY) - dh - bob, dw, dh);
+            g.DrawImage(img, dst);
+            DrawHat(g, dst, flip);
             DrawDecor(g, offX, offY, lying);
             return;
         }
@@ -2177,7 +2314,7 @@ class PetForm : Form {
     void UpdateBubble() {
         if (bubbleTicks <= 0) return;
         Rectangle r;
-        if (CurAngle() != 0) r = new Rectangle(Left + M, Top + M, W, H);
+        if (BubbleAngle(Free, CurAngle(), ModeAngle()) != 0) r = new Rectangle(Left + M, Top + M, W, H);
         else {
             bool ly = Lying();
             int top = Top + M + H - (Body.Length + 2) * PX - CurHop() + (ly ? 2 * PX : 0);
@@ -2217,6 +2354,7 @@ class PetForm : Form {
     // Empieza una animacion solo si esta de pie en el suelo/ventana y sin sobresaltos
     void StartAnim(Anim a, int len) {
         if (mode != Mode.Floor || dragging || mood == Mood.Dormida || mood == Mood.Mareada || vy != 0) return;
+        if (useSprite) { a = SpriteAnim(a); if (a == Anim.Look) len = 90; }
         anim = a; animT = 0; animLen = len;
         if (a == Anim.Code) { codeSide = dir >= 0 ? 1 : -1; lookX = codeSide; lookY = 1; }
     }
@@ -2321,6 +2459,8 @@ class PetForm : Form {
             else if (++animT >= animLen) {
                 anim = Anim.None;
                 if (pendingSleep) { pendingSleep = false; StartSleep(); }
+            } else if (useSprite && anim == Anim.Wave && WaveHopAt(animT) && hop <= 0) {
+                hopV = 4;   // saludo de Pokemon: saltito
             }
         } else if (mode == Mode.Floor && !dragging && vy == 0 && chaseTicks <= 0 && (mood == Mood.Normal || mood == Mood.Aburrida)) {
             // bostezo o "programar" espontaneo cada ~3-5 min (para un momento lo que estuviera haciendo);
