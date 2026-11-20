@@ -1284,16 +1284,22 @@ class PetForm : Form {
         if (!useSprite) return ModeAngle();
         // Pokemon: se contonea al andar y se balancea al saludar
         bool moving = WaddleMoving(walking, paused, anim, mood == Mood.Dormida, vy);
-        return ModeAngle() + WaddleAngle(moving, mode == Mode.Floor, frame) + (anim == Anim.Wave ? WaveTilt(animT) : 0);
+        return ModeAngle() + WaddleAngle(moving, mode == Mode.Floor, tick) + (anim == Anim.Wave ? WaveTilt(animT) : 0);
     }
 
     // ---------- Vida de los Pokemon (funciones puras, ver tests\MascotaTests.cs) ----------
     // "Programar" no tiene sentido sin portatil: un Pokemon mira alrededor
     internal static Anim SpriteAnim(Anim a) { return a == Anim.Code ? Anim.Look : a; }
     // Contoneo al andar por el suelo: se inclina a un lado y al otro con cada paso
-    internal static float WaddleAngle(bool moving, bool onFloor, int frame) {
+    // Andar a saltitos de lado a lado: un saltito cada WALK_HOP ticks, inclinandose a un lado y al otro
+    const int WALK_HOP = 6;
+    internal static float WaddleAngle(bool moving, bool onFloor, int t) {
         if (!moving || !onFloor) return 0;
-        return frame == 0 ? -4f : 4f;
+        return (t / WALK_HOP) % 2 == 0 ? -5f : 5f;
+    }
+    // Altura del saltito (arco) en el tick t; px = altura maxima
+    internal static int WalkHopPx(int t, int px) {
+        return (int)Math.Round(px * Math.Sin(Math.PI * (t % WALK_HOP) / WALK_HOP));
     }
     // Solo se contonea si de verdad esta dando pasos (mismas condiciones que avanzan "frame")
     internal static bool WaddleMoving(bool walking, bool paused, Anim anim, bool asleep, double vy) {
@@ -1321,7 +1327,13 @@ class PetForm : Form {
     bool Lying() { return mood == Mood.Dormida && mode == Mode.Floor && !dragging && vy == 0; }
     // Rebotito al andar (1 px o poco mas, en el paso con patas B)
     int Bob() { return (walking && !paused && anim == Anim.None && mood != Mood.Dormida && mode == Mode.Floor && !Free && frame == 1) ? Math.Max(1, PX / 5) : 0; }
-    int CurHop() { return (Free || Lying()) ? 0 : (int)Math.Round(hop) + Bob(); }
+    int CurHop() {
+        if (Free || Lying()) return 0;
+        // Pokemon: anda a saltitos en vez del rebotito de Claudio
+        if (useSprite && mode == Mode.Floor && WaddleMoving(walking, paused, anim, mood == Mood.Dormida, vy))
+            return (int)Math.Round(hop) + WalkHopPx(tick, PX);
+        return (int)Math.Round(hop) + Bob();
+    }
 
     // Parpadeo en 3 fases: 0 = abiertos, 1 = entornados, 2 = cerrados
     int BlinkPhase() {
@@ -1680,7 +1692,7 @@ class PetForm : Form {
             bool flip = Flip(); lastFlip = flip;
             BuildSprites();
             Bitmap img = flip ? sprFlip : spr;
-            int bob = ReferenceEquals(legs, LegsB) ? Math.Max(1, PX / 3) : 0;   // "paso" al andar
+            int bob = 0;   // el "paso" ya lo dan los saltitos (CurHop)
             int dw = (int)Math.Round(img.Width * scX), dh = (int)Math.Round(img.Height * scY);
             g.InterpolationMode = InterpolationMode.NearestNeighbor;
             g.PixelOffsetMode = PixelOffsetMode.Half;

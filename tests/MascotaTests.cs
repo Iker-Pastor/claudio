@@ -26,10 +26,15 @@ static class MascotaTests {
         // Task 1: vida de los Pokemon
         Eq(Anim.Look, PetForm.SpriteAnim(Anim.Code), "SpriteAnim_CodeEsLook");
         Eq(Anim.Wave, PetForm.SpriteAnim(Anim.Wave), "SpriteAnim_WaveIgual");
-        Eq(0f, PetForm.WaddleAngle(false, true, 1), "Waddle_Parado");
-        Eq(0f, PetForm.WaddleAngle(true, false, 1), "Waddle_Pared");
-        Eq(-4f, PetForm.WaddleAngle(true, true, 0), "Waddle_Paso0");
-        Eq(4f, PetForm.WaddleAngle(true, true, 1), "Waddle_Paso1");
+        // Andar a saltitos de lado a lado (un saltito cada 6 ticks)
+        Eq(0f, PetForm.WaddleAngle(false, true, 3), "Waddle_Parado");
+        Eq(0f, PetForm.WaddleAngle(true, false, 3), "Waddle_Pared");
+        Eq(-5f, PetForm.WaddleAngle(true, true, 3), "Waddle_SaltoIzq");
+        Eq(5f, PetForm.WaddleAngle(true, true, 9), "Waddle_SaltoDer");
+        Eq(0, PetForm.WalkHopPx(0, 6), "WalkHop_Despega");
+        Eq(6, PetForm.WalkHopPx(3, 6), "WalkHop_Cima");
+        Eq(true, PetForm.WalkHopPx(5, 6) < 6 && PetForm.WalkHopPx(5, 6) > 0, "WalkHop_Baja");
+        Eq(6, PetForm.WalkHopPx(9, 6), "WalkHop_SiguienteCima");
         // Revision final: no se queda inclinada al parar para una animacion, dormir o caer
         Eq(false, PetForm.WaddleMoving(true, false, Anim.Yawn, false, 0), "Waddle_Animacion");
         Eq(false, PetForm.WaddleMoving(true, false, Anim.None, true, 0), "Waddle_Dormida");
