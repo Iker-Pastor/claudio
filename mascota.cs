@@ -1405,7 +1405,7 @@ class PetForm : Form {
     }
 
     // ---------- Accesorios por fecha ----------
-    static Acc AutoAcc(DateTime d) {
+    internal static Acc AutoAcc(DateTime d) {
         int m = d.Month, day = d.Day;
         if ((m == 12 && day == 31) || (m == 1 && day == 1)) return Acc.Fiesta;   // prioridad
         if (m == 12 || (m == 1 && day <= 6)) return Acc.Navidad;
