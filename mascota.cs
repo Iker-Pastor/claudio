@@ -198,7 +198,7 @@ class Reminder {
 class WinInfo { public IntPtr H; public Rectangle R; public bool Usable; }
 
 enum Acc { Ninguno, Navidad, Bruja, Fiesta, Gafas }
-enum Anim { None, Code, Yawn, Wave }
+enum Anim { None, Code, Yawn, Wave, Look }   // Look: solo Pokemon (mira a un lado y al otro)
 
 // Particula (polvo = 0, estrellita = 1) en coordenadas de pantalla
 class Particle { public double X, Y, VX, VY; public int Life, Max, Kind, Size; }
@@ -548,7 +548,7 @@ class PetForm : Form {
     int accMode = -1;                                 // -1 = automatico (por fecha); si no, el valor de Acc
     Acc accNow = Acc.Ninguno;
     readonly ToolStripMenuItem[] miAccItems = new ToolStripMenuItem[6];
-    ToolStripMenuItem miAcc, miDo;
+    ToolStripMenuItem miAcc, miDo, miDoCode;
     readonly SolidBrush bRed = new SolidBrush(Color.FromArgb(205, 40, 50));
     readonly SolidBrush bWhite = new SolidBrush(Color.FromArgb(245, 245, 245));
     readonly SolidBrush bPurple = new SolidBrush(Color.FromArgb(75, 45, 115));
@@ -668,7 +668,7 @@ class PetForm : Form {
         miDo = new ToolStripMenuItem("Hacer...");
         miDo.DropDownItems.Add("Saludar", null, delegate { DoAnim(Anim.Wave, 80); });
         miDo.DropDownItems.Add("Bostezar", null, delegate { DoAnim(Anim.Yawn, 70); });
-        miDo.DropDownItems.Add("Programar", null, delegate { DoAnim(Anim.Code, 360); });
+        miDoCode = (ToolStripMenuItem)miDo.DropDownItems.Add("Programar", null, delegate { DoAnim(Anim.Code, 360); });
         menu.Items.Add(miDo);
 
         miAcc = new ToolStripMenuItem("Accesorios");
@@ -951,7 +951,8 @@ class PetForm : Form {
         if (useSprite || recents.Count == 0) AddRecent(pokeId, pokeName);   // Pokemon por defecto si aun no hay ninguno
         RebuildSkinMenu();
         // Las animaciones y accesorios son solo del Claudio actual: con un Pokemon o el OG se ocultan del menu
-        miDo.Visible = skin == "claudio";
+        miDo.Visible = skin != "og";        // los Pokemon tambien saludan y bostezan...
+        miDoCode.Visible = !useSprite;      // ...pero no programan
         miAcc.Visible = skin == "claudio";
         UpdateTrayIcon();
         // "Color": paleta para Claudio, Normal/Shiny para Clawitzer
@@ -1214,6 +1215,10 @@ class PetForm : Form {
     // El sprite de Clawitzer mira a la izquierda: se voltea cuando camina hacia la derecha
     // (segun el modo, "derecha" del sprite apunta a un sitio distinto de la pantalla).
     bool Flip() {
+        bool f = BaseFlip();
+        return (useSprite && anim == Anim.Look && LookFlipped(animT, animLen)) ? !f : f;   // mirar alrededor
+    }
+    bool BaseFlip() {
         if (Free) return dir > 0;
         switch (mode) {
             case Mode.WallR: return vdir < 0;
@@ -1270,7 +1275,35 @@ class PetForm : Form {
 
     // ---------- Dibujo ----------
     bool Free { get { return dragging || mode == Mode.Air; } }
-    float CurAngle() { return Free ? (float)(phi * 180.0 / Math.PI) : ModeAngle(); }
+    float CurAngle() {
+        if (Free) return (float)(phi * 180.0 / Math.PI);
+        if (!useSprite) return ModeAngle();
+        // Pokemon: se contonea al andar y se balancea al saludar
+        return ModeAngle() + WaddleAngle(walking, paused, mode == Mode.Floor, frame) + (anim == Anim.Wave ? WaveTilt(animT) : 0);
+    }
+
+    // ---------- Vida de los Pokemon (funciones puras, ver tests\MascotaTests.cs) ----------
+    // "Programar" no tiene sentido sin portatil: un Pokemon mira alrededor
+    internal static Anim SpriteAnim(Anim a) { return a == Anim.Code ? Anim.Look : a; }
+    // Contoneo al andar por el suelo: se inclina a un lado y al otro con cada paso
+    internal static float WaddleAngle(bool walking, bool paused, bool onFloor, int frame) {
+        if (!walking || paused || !onFloor) return 0;
+        return frame == 0 ? -4f : 4f;
+    }
+    // Balanceo al saludar (grados enteros para no repintar cada tick)
+    internal static float WaveTilt(int animT) { return (float)Math.Round(6 * Math.Sin(animT * 0.35)); }
+    // Bostezo: se estira hacia arriba y al final suelta el aire achatandose un poco
+    internal static double YawnSquash(int animT, int animLen) {
+        int end = animLen - 20;
+        if (animT >= animLen) return 0;
+        if (animT < 10) return -0.15 * animT / 10.0;
+        if (animT < end) return -0.15;
+        return 0.10 * (animLen - animT) / 20.0;
+    }
+    // Mirar alrededor: el tercio central mira hacia el otro lado
+    internal static bool LookFlipped(int animT, int animLen) { return animT >= animLen / 3 && animT < 2 * animLen / 3; }
+    // Saludo de Pokemon: dos saltitos
+    internal static bool WaveHopAt(int animT) { return animT == 2 || animT == 26; }
     // Tumbada durmiendo en el suelo (sin patas, el cuerpo apoyado)
     bool Lying() { return mood == Mood.Dormida && mode == Mode.Floor && !dragging && vy == 0; }
     // Rebotito al andar (1 px o poco mas, en el paso con patas B)
@@ -1294,7 +1327,8 @@ class PetForm : Form {
         if (Free) return 0;
         double s = 0.2 * sqT / 6.0;
         if (hopV > 1 && hop > 0) s -= 0.10;
-        if (anim == Anim.Code && animLen > 0) {   // se agacha hacia el portatil mientras teclea
+        if (useSprite && anim == Anim.Yawn) s += YawnSquash(animT, animLen);
+        if (!useSprite && anim == Anim.Code && animLen > 0) {   // se agacha hacia el portatil mientras teclea
             int u = Math.Min(animT, animLen - animT);
             s += 0.22 * Math.Min(1.0, Math.Max(0.0, (u - 14) / 14.0));
         }
@@ -1339,6 +1373,7 @@ class PetForm : Form {
             case Anim.Wave: return 10 + (animT / 4) % 2;
             case Anim.Code: return 40 + animT / 3;      // teclas y lineas de codigo cambian cada 3 ticks
             case Anim.Yawn: return 30 + YawnStage();
+            case Anim.Look: return 50 + (LookFlipped(animT, animLen) ? 1 : 0);
         }
         return 0;
     }
@@ -2217,6 +2252,7 @@ class PetForm : Form {
     // Empieza una animacion solo si esta de pie en el suelo/ventana y sin sobresaltos
     void StartAnim(Anim a, int len) {
         if (mode != Mode.Floor || dragging || mood == Mood.Dormida || mood == Mood.Mareada || vy != 0) return;
+        if (useSprite) { a = SpriteAnim(a); if (a == Anim.Look) len = 90; }
         anim = a; animT = 0; animLen = len;
         if (a == Anim.Code) { codeSide = dir >= 0 ? 1 : -1; lookX = codeSide; lookY = 1; }
     }
@@ -2321,6 +2357,8 @@ class PetForm : Form {
             else if (++animT >= animLen) {
                 anim = Anim.None;
                 if (pendingSleep) { pendingSleep = false; StartSleep(); }
+            } else if (useSprite && anim == Anim.Wave && WaveHopAt(animT) && hop <= 0) {
+                hopV = 4;   // saludo de Pokemon: saltito
             }
         } else if (mode == Mode.Floor && !dragging && vy == 0 && chaseTicks <= 0 && (mood == Mood.Normal || mood == Mood.Aburrida)) {
             // bostezo o "programar" espontaneo cada ~3-5 min (para un momento lo que estuviera haciendo);
