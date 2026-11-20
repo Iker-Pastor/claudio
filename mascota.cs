@@ -468,6 +468,7 @@ class PetForm : Form {
     bool shiny = true;                    // variante: shiny o normal
     Bitmap petImg;                        // sprite original, recortado al contenido
     Bitmap spr, sprFlip; int sprPX = -1;  // sprite ya escalado al tamano actual (normal y volteado)
+    Rectangle sprHead;                    // cabeza del sprite (coordenadas de spr); vacia = no lleva gorro
     bool lastFlip;
     readonly ToolStripMenuItem miSkin, miSkinClaudio, miSkinOg, miSkinPick, miNormal, miShiny, miShow;
     // Pokemon usados recientemente (id + nombre), el mas reciente primero; se guardan en config.txt
@@ -612,7 +613,7 @@ class PetForm : Form {
         miRainbow = new ToolStripMenuItem("Arcoíris", RainbowSwatch());
         miRainbow.Click += delegate { rainbow = true; UpdateColorChecks(); SaveConfig(); };
         miColor.DropDownItems.Add(miRainbow);
-        // Con Clawitzer, "Color" ofrece sus dos variantes en vez de la paleta
+        // Con un Pokemon, "Color" ofrece sus dos variantes en vez de la paleta
         miNormal = new ToolStripMenuItem("Normal");
         miNormal.Click += delegate { SetShiny(false); };
         miShiny = new ToolStripMenuItem("Shiny");
@@ -950,12 +951,13 @@ class PetForm : Form {
         if (!useSprite && skin == "pokemon") skin = "claudio";
         if (useSprite || recents.Count == 0) AddRecent(pokeId, pokeName);   // Pokemon por defecto si aun no hay ninguno
         RebuildSkinMenu();
-        // Las animaciones y accesorios son solo del Claudio actual: con un Pokemon o el OG se ocultan del menu
+        // Claudio OG no tiene animaciones ni accesorios; los Pokemon si (sin programar ni gafas)
         miDo.Visible = skin != "og";        // los Pokemon tambien saludan y bostezan...
         miDoCode.Visible = !useSprite;      // ...pero no programan
-        miAcc.Visible = skin == "claudio";
+        miAcc.Visible = skin != "og";       // Claudio OG sigue sin accesorios
+        miAccItems[5].Visible = !useSprite; // "Gafas de sol": los Pokemon no
         UpdateTrayIcon();
-        // "Color": paleta para Claudio, Normal/Shiny para Clawitzer
+        // "Color": paleta para Claudio, Normal/Shiny para los Pokemon
         foreach (ToolStripItem it in miColor.DropDownItems)
             it.Visible = (it == miNormal || it == miShiny) ? useSprite : !useSprite;
         miNormal.Checked = !shiny; miShiny.Checked = shiny;
@@ -1210,9 +1212,11 @@ class PetForm : Form {
         if (spr != null) spr.Dispose();
         if (sprFlip != null) sprFlip.Dispose();
         spr = b; sprFlip = f; sprPX = PX;
+        sprHead = HeadBox(spr);
+        if (!HatFits(spr, sprHead)) sprHead = Rectangle.Empty;   // orejas o cuernos arriba: sin gorro
     }
 
-    // El sprite de Clawitzer mira a la izquierda: se voltea cuando camina hacia la derecha
+    // Los sprites de Pokemon miran a la izquierda: se voltea cuando camina hacia la derecha
     // (segun el modo, "derecha" del sprite apunta a un sitio distinto de la pantalla).
     bool Flip() {
         bool f = BaseFlip();
@@ -1511,17 +1515,40 @@ class PetForm : Form {
 
     internal static int HatCol(int col, bool flip) { return flip ? 13 - col : col; }
 
-    // Si lo alto del sprite son orejas o cuernos, no se pone gorro:
-    // varios tramos separados en la franja (dos orejas) o una franja muy estrecha (un cuerno)
+    // Si lo alto del sprite son orejas, cuernos o pinzas, no se pone gorro. Se detecta como "salientes finos":
+    // desde lo alto se tarda mas de 1/8 del alto en llegar a una fila maciza (un tramo opaco >= 30% del ancho).
+    // Calibrado con Pikachu, Eevee, Umbreon y Clawitzer (sin gorro) y Jigglypuff, Snorlax, Bulbasaur (con gorro).
     internal static bool HatFits(Bitmap b, Rectangle head) {
         if (head.IsEmpty) return false;
-        if (head.Width < 0.35 * b.Width) return false;
-        int y = head.Y + head.Height / 2, runs = 0, gap = 2;
-        for (int x = head.Left; x < head.Right; x++) {
-            if (b.GetPixel(x, y).A >= 128) { if (gap > 1) runs++; gap = 0; }
-            else gap++;
+        int minRun = (int)Math.Ceiling(0.3 * b.Width);
+        for (int y = head.Y; y < b.Height; y++) {
+            int run = 0, best = 0;
+            for (int x = 0; x < b.Width; x++) {
+                if (b.GetPixel(x, y).A >= 128) { run++; if (run > best) best = run; }
+                else run = 0;
+            }
+            if (best >= minRun) return y - head.Y <= b.Height / 8;
         }
-        return runs < 2;
+        return false;
+    }
+
+    // Gorro sobre un Pokemon: centrado en su cabeza, con el ala encajada una celda y espejado si mira al otro lado.
+    // dst = rectangulo donde se ha dibujado el sprite (ya con squash y saltito), asi el gorro lo sigue.
+    void DrawHat(Graphics g, Rectangle dst, bool flip) {
+        int[][] shape = HatShape(SpriteAcc(accNow));
+        if (shape == null || sprHead.IsEmpty) return;
+        int cell = HatCell(sprHead.Width, PX);
+        double cw = cell * scX, ch = cell * scY;
+        int hx = flip ? spr.Width - sprHead.Right : sprHead.X;
+        double cx = dst.X + (hx + sprHead.Width / 2.0) * scX;
+        double topY = dst.Y + sprHead.Y * scY + ch;
+        foreach (int[] r in shape) {
+            int a = HatCol(r[0], flip), b = HatCol(r[1], flip);
+            if (a > b) { int t = a; a = b; b = t; }
+            int xa = (int)Math.Round(cx + (a - 7) * cw), xb = (int)Math.Round(cx + (b - 6) * cw);
+            int ya = (int)Math.Round(topY + r[2] * ch), yb = (int)Math.Round(topY + (r[2] + 1) * ch);
+            g.FillRectangle(HatBrush(r[3]), xa, ya, xb - xa, yb - ya);
+        }
     }
 
     // Se dibujan en coordenadas del sprite (fila 0 = tope de la cabeza), asi giran y escalan con ella
@@ -1637,7 +1664,7 @@ class PetForm : Form {
         // squash & stretch anclado en los pies
         scY = 1 - sq; scX = 1 + 0.55 * sq; anX = offX + 7 * PX; anY = offY + rows * PX;
         if (useSprite) {
-            // Clawitzer: mismo anclaje en los pies y mismo squash & stretch; sin ojos/boca/accesorios de Claudio
+            // Pokemon: mismo anclaje en los pies y mismo squash & stretch; sin ojos/boca de Claudio, con su gorro si le cabe
             bool flip = Flip(); lastFlip = flip;
             BuildSprites();
             Bitmap img = flip ? sprFlip : spr;
@@ -1645,7 +1672,9 @@ class PetForm : Form {
             int dw = (int)Math.Round(img.Width * scX), dh = (int)Math.Round(img.Height * scY);
             g.InterpolationMode = InterpolationMode.NearestNeighbor;
             g.PixelOffsetMode = PixelOffsetMode.Half;
-            g.DrawImage(img, new Rectangle((int)Math.Round(anX - dw / 2.0), (int)Math.Round(anY) - dh - bob, dw, dh));
+            Rectangle dst = new Rectangle((int)Math.Round(anX - dw / 2.0), (int)Math.Round(anY) - dh - bob, dw, dh);
+            g.DrawImage(img, dst);
+            DrawHat(g, dst, flip);
             DrawDecor(g, offX, offY, lying);
             return;
         }

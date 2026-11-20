@@ -64,6 +64,12 @@ static class MascotaTests {
         Eq(false, PetForm.HatFits(cuerno, PetForm.HeadBox(cuerno)), "HatFits_UnCuerno");
         Eq(true, PetForm.HatFits(redonda, PetForm.HeadBox(redonda)), "HatFits_Redonda");
         Eq(false, PetForm.HatFits(redonda, Rectangle.Empty), "HatFits_Vacio");
+        // Como Pikachu: orejas a distinta altura, en la fila central de la franja solo se ve una
+        Bitmap pika = Bmp(60, 60, new Rectangle(0, 20, 60, 40), new Rectangle(2, 0, 6, 20), new Rectangle(40, 6, 6, 14));
+        Eq(false, PetForm.HatFits(pika, PetForm.HeadBox(pika)), "HatFits_OrejasDesiguales");
+        // Mechon pequeno sobre una cabeza ancha (como Jigglypuff): si lleva gorro
+        Bitmap mechon = Bmp(60, 60, new Rectangle(5, 4, 50, 56), new Rectangle(28, 0, 6, 4));
+        Eq(true, PetForm.HatFits(mechon, PetForm.HeadBox(mechon)), "HatFits_Mechon");
 
         Console.WriteLine(fallos == 0 ? "TODOS OK" : fallos + " FALLOS");
         return fallos;
