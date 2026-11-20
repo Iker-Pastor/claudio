@@ -1455,32 +1455,81 @@ class PetForm : Form {
         for (int i = 0; i < miAccItems.Length; i++) miAccItems[i].Checked = (i == accMode + 1);
     }
 
+    // Gorros como datos: {x0, x1, fila, color} en columnas 0-13 del cuerpo de Claudio (fila -1 = justo encima de la cabeza).
+    // Colores: 0 blanco, 1 rojo, 2 morado, 3 dorado, 4 rosa, 5 azul. Los comparten Claudio y los Pokemon.
+    static readonly int[][] HatNavidad = {
+        new[] { 2, 11, -1, 0 }, new[] { 3, 10, -2, 1 }, new[] { 4, 9, -3, 1 },
+        new[] { 5, 9, -4, 1 }, new[] { 7, 9, -5, 1 }, new[] { 10, 11, -5, 0 } };
+    static readonly int[][] HatBruja = {
+        new[] { 0, 13, -1, 2 }, new[] { 4, 9, -2, 2 }, new[] { 6, 7, -2, 3 }, new[] { 5, 8, -3, 2 },
+        new[] { 6, 8, -4, 2 }, new[] { 7, 8, -5, 2 }, new[] { 8, 9, -6, 2 } };
+    static readonly int[][] HatFiesta = {
+        new[] { 4, 9, -1, 4 }, new[] { 5, 8, -2, 5 }, new[] { 6, 7, -3, 4 }, new[] { 6, 7, -4, 3 } };
+
+    internal static int[][] HatShape(Acc a) {
+        switch (a) {
+            case Acc.Navidad: return HatNavidad;
+            case Acc.Bruja: return HatBruja;
+            case Acc.Fiesta: return HatFiesta;
+        }
+        return null;   // Ninguno y Gafas no son gorros
+    }
+
+    Brush HatBrush(int c) {
+        switch (c) {
+            case 0: return bWhite;
+            case 1: return bRed;
+            case 2: return bPurple;
+            case 3: return bGold;
+            case 4: return bPink;
+        }
+        return bBlue;
+    }
+
+    // Un Pokemon no lleva gafas: no se sabe donde tiene los ojos
+    internal static Acc SpriteAcc(Acc a) { return a == Acc.Gafas ? Acc.Ninguno : a; }
+
+    // "Cabeza" del sprite: franja superior (al menos 1/6 del alto) y su ancho opaco
+    internal static Rectangle HeadBox(Bitmap b) {
+        int top = -1;
+        for (int y = 0; y < b.Height && top < 0; y++)
+            for (int x = 0; x < b.Width; x++)
+                if (b.GetPixel(x, y).A >= 128) { top = y; break; }
+        if (top < 0) return Rectangle.Empty;
+        int band = Math.Min(Math.Max(2, b.Height / 6), b.Height - top);
+        int x0 = b.Width, x1 = -1;
+        for (int y = top; y < top + band; y++)
+            for (int x = 0; x < b.Width; x++)
+                if (b.GetPixel(x, y).A >= 128) { if (x < x0) x0 = x; if (x > x1) x1 = x; }
+        return new Rectangle(x0, top, x1 - x0 + 1, band);
+    }
+
+    // Tamano de celda del gorro segun el ancho de la cabeza (entre PX/2 y PX)
+    internal static int HatCell(int headWidthPx, int px) {
+        return Math.Max(Math.Max(2, px / 2), Math.Min(px, (int)Math.Round(headWidthPx / 10.0)));
+    }
+
+    internal static int HatCol(int col, bool flip) { return flip ? 13 - col : col; }
+
+    // Si lo alto del sprite son orejas o cuernos, no se pone gorro:
+    // varios tramos separados en la franja (dos orejas) o una franja muy estrecha (un cuerno)
+    internal static bool HatFits(Bitmap b, Rectangle head) {
+        if (head.IsEmpty) return false;
+        if (head.Width < 0.35 * b.Width) return false;
+        int y = head.Y + head.Height / 2, runs = 0, gap = 2;
+        for (int x = head.Left; x < head.Right; x++) {
+            if (b.GetPixel(x, y).A >= 128) { if (gap > 1) runs++; gap = 0; }
+            else gap++;
+        }
+        return runs < 2;
+    }
+
     // Se dibujan en coordenadas del sprite (fila 0 = tope de la cabeza), asi giran y escalan con ella
     void DrawAcc(Graphics g, int offX, int offY) {
+        int[][] hat = HatShape(accNow);
+        if (hat != null)
+            foreach (int[] r in hat) Row(g, offX, offY, r[0], r[1], r[2], HatBrush(r[3]));
         switch (accNow) {
-            case Acc.Navidad:
-                Row(g, offX, offY, 2, 11, -1, bWhite);
-                Row(g, offX, offY, 3, 10, -2, bRed);
-                Row(g, offX, offY, 4, 9, -3, bRed);
-                Row(g, offX, offY, 5, 9, -4, bRed);
-                Row(g, offX, offY, 7, 9, -5, bRed);
-                Row(g, offX, offY, 10, 11, -5, bWhite);
-                break;
-            case Acc.Bruja:
-                Row(g, offX, offY, 0, 13, -1, bPurple);
-                Row(g, offX, offY, 4, 9, -2, bPurple);
-                Row(g, offX, offY, 6, 7, -2, bGold);
-                Row(g, offX, offY, 5, 8, -3, bPurple);
-                Row(g, offX, offY, 6, 8, -4, bPurple);
-                Row(g, offX, offY, 7, 8, -5, bPurple);
-                Row(g, offX, offY, 8, 9, -6, bPurple);
-                break;
-            case Acc.Fiesta:
-                Row(g, offX, offY, 4, 9, -1, bPink);
-                Row(g, offX, offY, 5, 8, -2, bBlue);
-                Row(g, offX, offY, 6, 7, -3, bPink);
-                Row(g, offX, offY, 6, 7, -4, bGold);
-                break;
             case Acc.Gafas:
                 Row(g, offX, offY, 2, 5, 2, bBlack); Row(g, offX, offY, 2, 5, 3, bBlack); Row(g, offX, offY, 2, 5, 4, bBlack);
                 Row(g, offX, offY, 8, 11, 2, bBlack); Row(g, offX, offY, 8, 11, 3, bBlack); Row(g, offX, offY, 8, 11, 4, bBlack);

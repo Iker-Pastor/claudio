@@ -11,6 +11,16 @@ static class MascotaTests {
         else { fallos++; Console.WriteLine("FALLO " + nombre + ": esperado " + esperado + ", real " + real); }
     }
 
+    // Bitmap transparente con rectangulos opacos
+    static Bitmap Bmp(int w, int h, params Rectangle[] opacos) {
+        Bitmap b = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        using (Graphics g = Graphics.FromImage(b)) {
+            g.Clear(Color.Transparent);
+            foreach (Rectangle r in opacos) g.FillRectangle(Brushes.Black, r);
+        }
+        return b;
+    }
+
     static int Main() {
         Eq(Acc.Fiesta, PetForm.AutoAcc(new DateTime(2026, 12, 31)), "AutoAcc_Nochevieja");
         // Task 1: vida de los Pokemon
@@ -29,6 +39,31 @@ static class MascotaTests {
         Eq(false, PetForm.LookFlipped(10, 90), "Look_Inicio");
         Eq(true, PetForm.WaveHopAt(2) && PetForm.WaveHopAt(26), "WaveHop_Si");
         Eq(false, PetForm.WaveHopAt(3), "WaveHop_No");
+
+        // Task 2: geometria de sombreros
+        int[][] nav = PetForm.HatShape(Acc.Navidad);
+        Eq(6, nav.Length, "HatShape_NavidadFilas");
+        Eq("2,11,-1,0", string.Join(",", nav[0]), "HatShape_NavidadAla");
+        Eq(null, PetForm.HatShape(Acc.Gafas), "HatShape_Gafas");
+        Eq(null, PetForm.HatShape(Acc.Ninguno), "HatShape_Ninguno");
+        Eq(Acc.Ninguno, PetForm.SpriteAcc(Acc.Gafas), "SpriteAcc_Gafas");
+        Eq(Acc.Bruja, PetForm.SpriteAcc(Acc.Bruja), "SpriteAcc_Bruja");
+        Eq(Rectangle.Empty, PetForm.HeadBox(Bmp(10, 10)), "HeadBox_Vacio");
+        Bitmap oreja = Bmp(60, 60, new Rectangle(20, 30, 20, 30), new Rectangle(25, 10, 3, 20));
+        Eq(new Rectangle(25, 10, 3, 10), PetForm.HeadBox(oreja), "HeadBox_Oreja");
+        Bitmap redonda = Bmp(60, 60, new Rectangle(10, 5, 40, 55));
+        Eq(new Rectangle(10, 5, 40, 10), PetForm.HeadBox(redonda), "HeadBox_Cabeza");
+        Eq(3, PetForm.HatCell(3, 6), "HatCell_Min");
+        Eq(6, PetForm.HatCell(60, 6), "HatCell_Justo");
+        Eq(6, PetForm.HatCell(1000, 6), "HatCell_Max");
+        Eq(3, PetForm.HatCol(10, true), "HatCol_Flip");
+        Eq(10, PetForm.HatCol(10, false), "HatCol_Normal");
+        Bitmap orejas = Bmp(60, 60, new Rectangle(10, 30, 40, 30), new Rectangle(12, 10, 6, 20), new Rectangle(42, 10, 6, 20));
+        Eq(false, PetForm.HatFits(orejas, PetForm.HeadBox(orejas)), "HatFits_DosOrejas");
+        Bitmap cuerno = Bmp(60, 60, new Rectangle(10, 30, 40, 30), new Rectangle(28, 5, 4, 25));
+        Eq(false, PetForm.HatFits(cuerno, PetForm.HeadBox(cuerno)), "HatFits_UnCuerno");
+        Eq(true, PetForm.HatFits(redonda, PetForm.HeadBox(redonda)), "HatFits_Redonda");
+        Eq(false, PetForm.HatFits(redonda, Rectangle.Empty), "HatFits_Vacio");
 
         Console.WriteLine(fallos == 0 ? "TODOS OK" : fallos + " FALLOS");
         return fallos;
