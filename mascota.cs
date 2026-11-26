@@ -473,6 +473,8 @@ class PetForm : Form {
     // Pokemon usados recientemente (id + nombre), el mas reciente primero; se guardan en config.txt
     readonly List<KeyValuePair<int, string>> recents = new List<KeyValuePair<int, string>>();
     const int MAX_RECENTS = 3;
+    PokeGame game;                        // minijuego "Adivina el Pokemon" (adivina.cs); mientras dura, el aspecto queda bloqueado
+    ToolStripMenuItem miGame;
     NotifyIcon tray;                      // icono junto al reloj: menu rapido y mostrar/ocultar
     bool petHidden;
     static readonly string SpriteDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MascotaClaude", "sprites");
@@ -633,6 +635,9 @@ class PetForm : Form {
         miSkin.DropDownItems.Add(new ToolStripSeparator());
         miSkin.DropDownItems.Add(miSkinPick);   // los recientes se insertan entre Claudio y el separador (RebuildSkinMenu)
         menu.Items.Add(miSkin);
+        miGame = new ToolStripMenuItem("Adivina el Pokémon...");
+        miGame.Click += delegate { OpenGame(); };
+        menu.Items.Add(miGame);
 
         miStay = new ToolStripMenuItem("Quieta");
         miStay.Click += delegate {
@@ -705,7 +710,11 @@ class PetForm : Form {
         });
         menu.Items.Add(miRem);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Salir", null, delegate { timer.Stop(); SetTeams(false); Close(); });
+        menu.Items.Add("Salir", null, delegate {
+            if (game != null && !game.IsDisposed) game.Close();   // si hay partida en curso, pregunta y abandona
+            if (game != null && !game.IsDisposed) return;         // dijo que no: seguimos
+            timer.Stop(); SetTeams(false); Close();
+        });
         ContextMenuStrip = menu;
 
         // Icono junto al reloj: mismo menu; click izquierdo = mostrar / ocultar la mascota
@@ -937,7 +946,34 @@ class PetForm : Form {
     }
 
     // ---------- Aspecto ----------
-    void SetSkin(string s) { skin = s; ApplySkin(); SaveConfig(); }
+    void SetSkin(string s) { if (GameLocked()) return; skin = s; ApplySkin(); SaveConfig(); }
+
+    // ---------- Minijuego "Adivina el Pokemon" (adivina.cs) ----------
+    bool GameLocked() { return game != null && !game.IsDisposed && game.Locked; }
+
+    // Habilita / bloquea el cambio de aspecto segun haya partida en marcha
+    void RefreshGameLock() {
+        bool locked = GameLocked();
+        miSkin.Enabled = !locked;
+        miSkin.Text = locked ? "Aspecto (bloqueado: partida en curso)" : "Aspecto";
+    }
+
+    void OpenGame() {
+        if (game != null && !game.IsDisposed) { game.Show(); if (game.WindowState == FormWindowState.Minimized) game.WindowState = FormWindowState.Normal; game.Activate(); return; }
+        if (!useSprite) {
+            MessageBox.Show("Para jugar tienes que ser un Pokémon: elige uno en Aspecto → Elegir Pokémon...", "Adivina el Pokémon", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        game = new PokeGame(pokeId, shiny, delegate(bool won) {
+            if (won) { SetMood(Mood.Feliz, 300); SayText("¡Hemos ganado! ^^", true); }
+            else SayText("Otra vez será... :(", true);
+        });
+        game.StateChanged += delegate { RefreshGameLock(); };
+        game.FormClosed += delegate { RefreshGameLock(); };
+        RefreshGameLock();
+        game.Show();
+        game.Activate();
+    }
     void SetShiny(bool s) { shiny = s; ApplySkin(); SaveConfig(); }
 
     void ApplySkin() {
@@ -1001,7 +1037,7 @@ class PetForm : Form {
     }
 
     // ---------- Pokemon: sprites de PokeAPI/sprites (Gen 5, 2D), con cache en %LOCALAPPDATA%\MascotaClaude\sprites ----------
-    static byte[] Download(string url, int timeoutMs) {
+    internal static byte[] Download(string url, int timeoutMs) {
         ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;   // TLS 1.2
         HttpWebRequest rq = (HttpWebRequest)WebRequest.Create(url);
         rq.UserAgent = "MascotaClaude"; rq.Timeout = timeoutMs; rq.ReadWriteTimeout = timeoutMs;
@@ -1015,7 +1051,7 @@ class PetForm : Form {
     }
 
     // Sprite del Pokemon (cache -> descarga). null + err si no se pudo.
-    static Bitmap GetPokeSprite(int id, bool shiny, out string err) {
+    internal static Bitmap GetPokeSprite(int id, bool shiny, out string err) {
         err = null;
         try {
             string dir = Path.Combine(SpriteDir, shiny ? "shiny" : "normal");
@@ -1066,6 +1102,7 @@ class PetForm : Form {
     }
 
     void PickPokemon() {
+        if (GameLocked()) return;
         List<PokeItem> dex;
         Cursor old = Cursor.Current; Cursor.Current = Cursors.WaitCursor;
         try { dex = LoadDex(); } finally { Cursor.Current = old; }
@@ -1111,6 +1148,7 @@ class PetForm : Form {
 
     // Descarga (si hace falta) y aplica; si no hay sprite se queda como estaba
     void SetPokemon(int id, string name, bool sh) {
+        if (GameLocked()) return;
         string err; Bitmap img;
         Cursor old = Cursor.Current; Cursor.Current = Cursors.WaitCursor;
         try { img = GetPokeSprite(id, sh, out err); } finally { Cursor.Current = old; }

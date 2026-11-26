@@ -12,6 +12,7 @@ Una mascota virtual de escritorio para Windows, hecha en C# + Windows Forms. Es 
 - **Rueda del ratón** encima de ella: la hace crecer o encoger.
 - **Click derecho**: menú con *Abrir Claude*, *Mostrar mascota*, *Color*, *Aspecto*, *Quieta / Pasear*, *Teams en verde*, *Bocadillos* y *Salir*.
 - **Aspecto**: click derecho → *Aspecto* para cambiar entre Claudio, **Claudio OG** (el diseño original, con ojos de píxel y sin cara nueva) y **cualquier Pokémon** (*Elegir Pokémon...*: buscador por nombre o número de los 1025 de la PokeAPI, con casilla *Shiny*). Usa los sprites 2D estilo Gen 5 de [PokeAPI/sprites](https://github.com/PokeAPI/sprites): se descargan la primera vez y se guardan en `%LOCALAPPDATA%MascotaClaudesprites`. Con un Pokémon, el menú *Color* ofrece *Normal* o *Shiny* en vez de la paleta. Se voltea según hacia dónde camina (algunos sprites miran al otro lado) y no dibuja los ojos, la boca, los accesorios ni la animación de programar de Claudio; los bocadillos, el ánimo, el sueño y las partículas siguen funcionando. Los 3 últimos Pokémon que has usado aparecen en el propio menú *Aspecto* para volver a ellos con un click. Con un Pokémon o Claudio OG no salen *Hacer...* ni *Accesorios*. La elección se guarda.
+- **Adivina el Pokémon** (minijuego para dos): click derecho → *Adivina el Pokémon...*. Tu mascota tiene que ser un Pokémon. Uno de los dos elige *Crear* y recibe un código (su IP codificada, p. ej. `C0A8-0105`) que le pasa al otro, que lo teclea en *Unirme* (también vale la IP). Por turnos, cada uno intenta adivinar el Pokémon del otro con **un intento por turno**: rellenar un campo (1.er tipo, 2.º tipo —con opción *Ninguno*—, habilidad, generación, fase evolutiva, categoría, color, altura, peso o inicial; sale en verde si acierta y en rojo si falla) o arriesgar el **nombre** (siempre disponible en tu turno; 3 fallos y pierdes). Gana quien acierte el nombre; también si el otro se queda sin intentos o abandona. **Mientras dura la partida, el aspecto queda bloqueado** (no se puede cambiar de Pokémon) hasta que alguien lo adivine, alguien gane o pierda, o abandones. Conexión directa por TCP (puerto 47831): tenéis que estar en la misma red u VPN, y la primera vez Windows puede pedir permiso en el firewall al crear la partida. Los datos salen de PokeAPI y solo los conoce el cliente de cada dueño (os fiáis uno del otro). Código en `adivina.cs`.
 - **Icono junto al reloj**: mientras corre, hay un icono en la bandeja del sistema (puede estar en los iconos ocultos) con el mismo menú que el click derecho. Click izquierdo = mostrar / ocultar la mascota (oculta se queda quieta, sin avisos; *Teams en verde* sigue activo). *Salir* la cierra del todo.
 - **Color**: click derecho → *Color* para elegir uno predefinido (naranja Claude, rojo, azul, verde, morado, rosa, amarillo, blanco) o uno personalizado, o el modo *Arcoíris*, en el que va cambiando de color sin parar. La elección se guarda.
 
@@ -48,7 +49,7 @@ Una mascota virtual de escritorio para Windows, hecha en C# + Windows Forms. Es 
 
 ## Uso
 
-Haz doble clic en `mascota.vbs`. La primera vez (y cada vez que modifiques `mascota.cs`) compila `mascota.exe` y después lo lanza sin ventana de consola.
+Haz doble clic en `mascota.vbs`. La primera vez (y cada vez que modifiques `mascota.cs` o `adivina.cs`) compila `mascota.exe` y después lo lanza sin ventana de consola.
 
 ### Arranque automático con Windows
 
@@ -62,7 +63,8 @@ Haz doble clic en `mascota.vbs`. La primera vez (y cada vez que modifiques `masc
 | Archivo | Descripción |
 |---|---|
 | `mascota.cs` | Código principal (sprite, física, animación, menú) |
-| `mascota.vbs` | Lanzador: compila `mascota.exe` si hace falta y lo arranca |
+| `adivina.cs` | Minijuego *Adivina el Pokémon* (se compila junto con `mascota.cs`) |
+| `mascota.vbs` | Lanzador: compila `mascota.cs` + `adivina.cs` en `mascota.exe` si hace falta y lo arranca |
 | `recordatorios.txt` | Tus recordatorios (lo crea la mascota al arrancar; no se sube al repositorio) |
 | `activar-inicio.bat` / `desactivar-inicio.bat` | Gestión del arranque automático |
 
